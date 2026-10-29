@@ -61,6 +61,15 @@ jobs:
           merge-multiple: true
       - name: List files
         run: ls -la dist
+      - name: Remove outdated assets from the knx-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view knx-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            for a in $(gh release view knx-latest -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+              [ -f "dist/$a" ] || gh release delete-asset knx-latest "$a" -R "$GITHUB_REPOSITORY" -y
+            done
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: knx-latest
