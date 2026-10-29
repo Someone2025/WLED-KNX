@@ -9,6 +9,8 @@
 Basis: offizielles **WLED 16.0.1** ([wled/WLED](https://github.com/wled/WLED), Tag `v16.0.1`). Der KNX-Usermod stammt ursprünglich von Franz Reisenhofer ([u20p17/WLED](https://github.com/u20p17/WLED), Branch `WLED_v16.0.0`) und wurde hier erweitert.
 Die Firmware wird bei jeder Änderung an `main` automatisch von GitHub gebaut.
 
+> ⚠️ **Nicht auf „Sync fork“ klicken.** Dieses Repo ist ein Fork von `wled/WLED`, dessen `main` die Entwicklungsversion 17 (`17.0.0-dev…`) enthält. Dieser Fork basiert bewusst auf der stabilen Version 16.0.1. Die Anzeige „… commits behind wled:main“ ist deshalb normal. Eine neue stabile WLED-Version wird gezielt über den passenden Release-Tag übernommen, nicht über „Sync fork“.
+
 ---
 
 <p align="center">
