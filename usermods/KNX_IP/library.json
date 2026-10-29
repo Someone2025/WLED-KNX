@@ -1,4 +1,7 @@
 {
   "name": "KNX_IP",
-  "build": { "libArchive": false }
+  "build": {
+    "libArchive": false,
+    "srcFilter": ["+<*>", "-<test_host/>"]
+  }
 }
