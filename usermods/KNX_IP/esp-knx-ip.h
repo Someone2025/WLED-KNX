@@ -183,6 +183,14 @@ public:
   // Callbacks for incoming GroupValue* services to a specific GA.
   void onGroup(uint16_t ga, KnxGroupCallback cb);
 
+  // Returns the callback currently registered for a GA (empty std::function if none).
+  // Used to chain a read-responder in front of an existing write handler on shared GAs.
+  KnxGroupCallback callbackFor(uint16_t ga) const {
+    auto it = _callbacks.find(ga);
+    return (it != _callbacks.end()) ? it->second : KnxGroupCallback();
+  }
+  bool hasGroupObject(uint16_t ga) const { return _gos.find(ga) != _gos.end(); }
+
   // High-level send helpers (payload is raw KNX data; you can use packers below)
   bool groupValueWrite(uint16_t ga, const uint8_t* data, uint8_t len);
   bool groupValueRead(uint16_t ga);

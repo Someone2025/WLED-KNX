@@ -166,6 +166,45 @@ public:
   bool hasGAConflicts(uint8_t maxSegments = 0) const;
   void analyzeGAConflicts() const;
 
+  // --- Per-segment colour objects + status + read responses (usermod_knx_ip_segments.cpp) ---
+  // Kinds of per-segment objects. Order matters: used as array index for snapshots.
+  enum SegKind : uint8_t
+  {
+    SK_PWR = 0, // DPT 1.001 / 1.011 status
+    SK_BRI,     // DPT 5.001 (segment opacity)
+    SK_FX,      // DPT 5.xxx effect index
+    SK_RGB,     // DPST-232-600 (3 bytes)
+    SK_CCT,     // DPT 7.600 Kelvin
+    SK_WW,      // DPT 5.010 warm-white component
+    SK_CW,      // DPT 5.010 cold-white component
+    SK_W,       // DPT 5.010 white channel
+    SK_COUNT
+  };
+  struct SegColorKOs
+  {
+    uint16_t in[SK_COUNT];  // only RGB/CCT/WW/CW/W used here (PWR/BRI/FX live in GA_SEG_IN_*)
+    uint16_t out[SK_COUNT]; // all kinds (PWR/BRI/FX mirror GA_SEG_OUT_*)
+  };
+  struct SegSnapshot
+  {
+    bool valid;
+    uint8_t len[SK_COUNT];
+    uint8_t val[SK_COUNT][3];
+  };
+
+  bool segmentColorEnabled = true; // register per-segment RGB/CCT/WW/CW/W objects + segment status
+  bool answerReadRequests = true;  // reply to GroupValue_Read on status (OUT) objects
+
+  void registerSegmentColorKOs();                                   // called at end of registerSegmentKOs()
+  void clearSegmentColorKOs();                                      // called from clearSegmentKOs()
+  void registerCentralReadResponders();                             // called from setup() after OUT objects
+  void publishSegmentStatusIfChanged(bool force = false);           // polled from loop()
+  uint8_t encodeSegmentValue(uint8_t seg, SegKind k, uint8_t *buf) const; // returns payload length (0 = n/a)
+  void appendSegmentCentralGAs(std::vector<const char *> &list) const;  // extra central GAs used for segment offsets
+  void onKnxSegmentCct(uint8_t segmentIndex, uint16_t kelvin);
+  void onKnxSegmentWhiteSplit(uint8_t segmentIndex, int16_t ww, int16_t cw); // -1 = keep component
+  void onKnxSegmentWhite(uint8_t segmentIndex, uint8_t w);
+
   // GA table for Info panel display
   String getGATableHTML() const;
 
@@ -215,6 +254,13 @@ private:
   uint16_t *GA_SEG_OUT_BRI = nullptr; // Array of brightness output GAs per segment
   uint16_t *GA_SEG_OUT_FX = nullptr;  // Array of effect output GAs per segment
   uint8_t numSegments = 0;            // Current number of segments
+
+  // Per-segment colour objects / status snapshots (sized to numSegments)
+  std::vector<SegColorKOs> _segKOs;
+  std::vector<SegSnapshot> _segSnap;
+  uint32_t _lastSegPollMs = 0;
+  uint16_t _lastSegCount = 0xFFFF;
+  uint32_t _segCountChangedAt = 0;
 
   // Track last preset value we set (used for OUT if configured)
   uint8_t _lastPreset = 0;

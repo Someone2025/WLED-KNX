@@ -276,6 +276,9 @@ std::vector<uint16_t> KnxIpUsermod::getAllUsedGAs(bool includeRegisteredSegmentG
   addGA(gaInRGB);
   addGA(gaInHSV);
   addGA(gaInRGBW);
+  addGA(gaInCct);
+  addGA(gaInWW);
+  addGA(gaInCW);
 
   // Essential central output GAs
   addGA(gaOutPower);
@@ -289,9 +292,24 @@ std::vector<uint16_t> KnxIpUsermod::getAllUsedGAs(bool includeRegisteredSegmentG
   addGA(gaOutRGB);
   addGA(gaOutHSV);
   addGA(gaOutRGBW);
+  addGA(gaOutCct);
+  addGA(gaOutWW);
+  addGA(gaOutCW);
 
   if (includeRegisteredSegmentGAs)
   {
+    // per-segment colour/status objects
+    for (const auto &ko : _segKOs)
+    {
+      for (uint8_t k = 0; k < SK_COUNT; k++)
+      {
+        if (ko.in[k])
+          usedGAs.push_back(ko.in[k]);
+        if (ko.out[k] && k > SK_FX) // PWR/BRI/FX OUT are added from GA_SEG_OUT_* below
+          usedGAs.push_back(ko.out[k]);
+      }
+    }
+
     // Include already registered segment GAs only for callers that need a full usage view.
     if (GA_SEG_IN_PWR)
     {
@@ -383,8 +401,9 @@ bool KnxIpUsermod::hasGAConflicts(uint8_t maxSegments) const
   std::vector<std::string> conflictList; // Store conflicts for error message
 
   // Parse central GAs for comparison
-  const char *centralGAs[] = {gaInPower, gaInBri, gaInFx, gaOutPower, gaOutBri, gaOutFx};
-  const int numCentralGAs = sizeof(centralGAs) / sizeof(centralGAs[0]);
+  std::vector<const char *> centralGAs = {gaInPower, gaInBri, gaInFx, gaOutPower, gaOutBri, gaOutFx};
+  appendSegmentCentralGAs(centralGAs); // per-segment colour objects use the same offset scheme
+  const int numCentralGAs = (int)centralGAs.size();
 
   for (int i = 0; i < numCentralGAs; i++)
   {
@@ -580,8 +599,9 @@ void KnxIpUsermod::analyzeGAConflicts() const
   std::vector<uint16_t> centralGAs_parsed;
 
   // Parse central GAs for comparison
-  const char *centralGAs[] = {gaInPower, gaInBri, gaInFx, gaOutPower, gaOutBri, gaOutFx};
-  const int numCentralGAs = sizeof(centralGAs) / sizeof(centralGAs[0]);
+  std::vector<const char *> centralGAs = {gaInPower, gaInBri, gaInFx, gaOutPower, gaOutBri, gaOutFx};
+  appendSegmentCentralGAs(centralGAs); // per-segment colour objects use the same offset scheme
+  const int numCentralGAs = (int)centralGAs.size();
 
   for (int i = 0; i < numCentralGAs; i++)
   {
@@ -912,6 +932,7 @@ void KnxIpUsermod::clearSegmentKOs()
   delete[] GA_SEG_OUT_FX;
   GA_SEG_OUT_FX = nullptr;
 
+  clearSegmentColorKOs();
   numSegments = 0;
 }
 
@@ -1030,6 +1051,9 @@ void KnxIpUsermod::registerSegmentKOs()
       KNX.addGroupObject(GA_SEG_OUT_FX[seg], DptMain::DPT_5xx, true, false);
     }
   }
+
+  // Per-segment colour objects (RGB/CCT/WW/CW/W), segment status OUT + read responders
+  registerSegmentColorKOs();
 
   KNX_UM_DEBUGF("[KNX-UM] Per-segment KO registration complete\n");
 }
@@ -2906,6 +2930,9 @@ void KnxIpUsermod::setup()
   if (GA_OUT_TEMP_ALARM)
     KNX.addGroupObject(GA_OUT_TEMP_ALARM, DptMain::DPT_1xx, /*tx=*/true, /*rx=*/false);
 
+  // Answer GroupValue_Read on the central status objects
+  registerCentralReadResponders();
+
   // Register per-segment KOs
   registerSegmentKOs();
 
@@ -3407,6 +3434,31 @@ void KnxIpUsermod::loop()
 
   // Preset: rely solely on scheduleStatePublish() detecting preset changes; no direct send here.
 
+  // Segment count changed in the UI -> re-register per-segment objects (debounced)
+  {
+    const uint16_t segNow = strip.getSegmentsNum();
+    if (_lastSegCount == 0xFFFF)
+      _lastSegCount = segNow;
+    if (segNow != _lastSegCount)
+    {
+      _lastSegCount = segNow;
+      _segCountChangedAt = millis();
+    }
+    if (_segCountChangedAt && millis() - _segCountChangedAt >= 1000)
+    {
+      _segCountChangedAt = 0;
+      KNX_UM_DEBUGF("[KNX-UM] Segment count changed to %u - re-registering segment objects\n", segNow);
+      registerSegmentKOs();
+    }
+  }
+
+  // Per-segment status feedback (only changed values are sent)
+  if (millis() - _lastSegPollMs >= (uint32_t)std::max<uint16_t>(_minUiSendIntervalMs, txRateLimitMs))
+  {
+    _lastSegPollMs = millis();
+    publishSegmentStatusIfChanged(false);
+  }
+
   // Optional periodic state publish
   if (periodicEnabled)
   {
@@ -3415,6 +3467,7 @@ void KnxIpUsermod::loop()
     {
       _lastPeriodicMs = now2;
       scheduleStatePublish();
+      publishSegmentStatusIfChanged(true);
     }
   }
 
@@ -3458,6 +3511,8 @@ void KnxIpUsermod::addToConfig(JsonObject &root)
   top["segment_offset_L"] = segmentOffsetL;
   top["segment_offset_M"] = segmentOffsetM;
   top["segment_offset_N"] = segmentOffsetN;
+  top["segment_color_objects"] = segmentColorEnabled;
+  top["answer_read_requests"] = answerReadRequests;
 
   JsonObject gIn = top.createNestedObject("GA in");
   gIn["power"] = gaInPower;
@@ -3544,9 +3599,17 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
   autoEnableBrightness = top["auto_enable_brightness"] | autoEnableBrightness;
   if (autoEnableBrightness > 255)
     autoEnableBrightness = 255;
+  const uint8_t prevOffL = segmentOffsetL, prevOffM = segmentOffsetM, prevOffN = segmentOffsetN;
+  const bool prevSegColor = segmentColorEnabled;
+  const bool prevAnswerReads = answerReadRequests;
   segmentOffsetL = top["segment_offset_L"] | segmentOffsetL;
   segmentOffsetM = top["segment_offset_M"] | segmentOffsetM;
   segmentOffsetN = top["segment_offset_N"] | segmentOffsetN;
+  segmentColorEnabled = top["segment_color_objects"] | segmentColorEnabled;
+  answerReadRequests = top["answer_read_requests"] | answerReadRequests;
+  // offsets / segment features change the registered GA set -> force a rebuild
+  const bool segFeatureChanged = (prevSegColor != segmentColorEnabled) || (prevAnswerReads != answerReadRequests) ||
+                                 (prevOffL != segmentOffsetL) || (prevOffM != segmentOffsetM) || (prevOffN != segmentOffsetN);
   if (segmentOffsetL > 31)
     segmentOffsetL = 31;
   if (segmentOffsetM > 7)
@@ -3881,7 +3944,7 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
   }
 
   // ---- rebuild vs. tweak ----
-  const bool rebuildNeeded = anyGAChanged || !prevEnabled;
+  const bool rebuildNeeded = anyGAChanged || !prevEnabled || segFeatureChanged;
 
   if (rebuildNeeded)
   {
@@ -4064,6 +4127,8 @@ void KnxIpUsermod::appendConfigData(Print &uiScript)
   // ---- CCT range at top-level ----
   uiScript.print(F("addInfo(ux+':cct_kelvin_min',1,' [K]');"));
   uiScript.print(F("addInfo(ux+':cct_kelvin_max',1,' [K]');"));
+  uiScript.print(F("addInfo(ux+':segment_color_objects',1,' per-segment RGB/CCT/WW/CW/W + status (GA = central + offset*n)');"));
+  uiScript.print(F("addInfo(ux+':answer_read_requests',1,' answer GroupValue_Read on status GAs');"));
   // Periodic interval units
   uiScript.print(F("addInfo(ux+':periodic_enabled',1,' [-]');"));
   uiScript.print(F("addInfo(ux+':periodic_interval_ms',1,' [ms]');"));

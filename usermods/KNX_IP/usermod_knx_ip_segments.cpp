@@ -1,0 +1,402 @@
+// =====================================================================================
+//  KNX_IP usermod – per-segment colour objects, segment status feedback and
+//  GroupValue_Read responses.
+//
+//  Additions on top of the existing per-segment Power/Brightness/Effect objects:
+//    * per-segment IN objects:  RGB (DPST-232-600), CCT (DPT 7.600 Kelvin),
+//                               WW / CW (DPT 5.010), W (DPT 5.010)
+//    * per-segment OUT objects: Power, Brightness, Effect (these existed but were never
+//                               sent), RGB, CCT, WW, CW, W  – sent on change
+//    * GroupValue_Read on any central or per-segment OUT object is answered with the
+//      current value (needed after HA restart, GT2/visualisation start-up, ETS "Read").
+//
+//  Per-segment GAs are derived from the central GA strings with the existing
+//  offset scheme (segment_offset_L/M/N), exactly like the Power/Bri/FX objects:
+//      GA(seg n) = central + n * (L/M/N)
+//  Segment 0 therefore always equals the central GA; to avoid double registration
+//  segment 0 is skipped for IN objects that are already registered centrally.
+// =====================================================================================
+
+#include "usermod_knx_ip.h"
+
+extern KnxIpCore KNX;
+
+namespace
+{
+  inline uint8_t segPct(uint8_t v0_255) { return (uint8_t)((v0_255 * 100u + 127u) / 255u); }
+
+  // DPT for each SegKind (used for addGroupObject so that 1-bit encoding is correct)
+  DptMain segKindDpt(KnxIpUsermod::SegKind k)
+  {
+    switch (k)
+    {
+    case KnxIpUsermod::SK_PWR:
+      return DptMain::DPT_1xx;
+    case KnxIpUsermod::SK_RGB:
+      return DptMain::DPT_232xx;
+    case KnxIpUsermod::SK_CCT:
+      return DptMain::DPT_7xx;
+    default:
+      return DptMain::DPT_5xx;
+    }
+  }
+
+  // Register a read responder on an OUT GA. If the GA already carries a callback
+  // (e.g. a user put IN and OUT on the same GA) the old callback is chained.
+  void attachReadResponder(uint16_t ga, DptMain dpt, std::function<uint8_t(uint8_t *)> provider)
+  {
+    if (!ga)
+      return;
+    if (!KNX.hasGroupObject(ga))
+      KNX.addGroupObject(ga, dpt, /*tx=*/true, /*rx=*/false);
+    KnxGroupCallback previous = KNX.callbackFor(ga);
+    KNX.onGroup(ga, [ga, provider, previous](uint16_t g, DptMain d, KnxService svc, const uint8_t *p, uint8_t len)
+                {
+      if (svc == KnxService::GroupValue_Read) {
+        uint8_t buf[8] = {0};
+        const uint8_t n = provider(buf);
+        if (n > 0) KNX.groupValueResponse(ga, buf, n);
+        return;
+      }
+      if (previous) previous(g, d, svc, p, len); });
+  }
+}
+
+// ------------------------------------------------------------------------------------
+// Central GA strings that also get per-segment instances (colour part).
+// Used by the conflict checker so that segment offsets are validated for these too.
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::appendSegmentCentralGAs(std::vector<const char *> &list) const
+{
+  if (!segmentColorEnabled)
+    return;
+  list.push_back(gaInRGB);
+  list.push_back(gaInCct);
+  list.push_back(gaInWW);
+  list.push_back(gaInCW);
+  list.push_back(gaInW);
+  list.push_back(gaOutRGB);
+  list.push_back(gaOutCct);
+  list.push_back(gaOutWW);
+  list.push_back(gaOutCW);
+  list.push_back(gaOutW);
+}
+
+// ------------------------------------------------------------------------------------
+// Encode the current value of one segment object into KNX payload bytes.
+// ------------------------------------------------------------------------------------
+uint8_t KnxIpUsermod::encodeSegmentValue(uint8_t s, SegKind k, uint8_t *buf) const
+{
+  if (s >= strip.getSegmentsNum())
+    return 0;
+  const Segment &seg = strip.getSegment(s);
+  if (!seg.isActive())
+    return 0;
+
+  const bool lit = seg.on && (bri > 0) && (seg.opacity > 0);
+  const uint32_t c = seg.colors[0];
+  const uint8_t w = W(c);
+  const uint8_t cct = seg.cct;
+
+  switch (k)
+  {
+  case SK_PWR:
+    buf[0] = lit ? 1 : 0;
+    return 1;
+  case SK_BRI:
+    buf[0] = KnxIpCore::packScaling(lit ? segPct(seg.opacity) : 0);
+    return 1;
+  case SK_FX:
+    buf[0] = seg.mode;
+    return 1;
+  case SK_RGB:
+    buf[0] = R(c);
+    buf[1] = G(c);
+    buf[2] = B(c);
+    return 3;
+  case SK_CCT:
+  {
+    const uint16_t kelvin = cct255ToKelvin(cct);
+    buf[0] = (uint8_t)(kelvin >> 8);
+    buf[1] = (uint8_t)(kelvin & 0xFF);
+    return 2;
+  }
+  case SK_WW:
+    buf[0] = (uint8_t)((uint16_t)w * (255u - cct) / 255u);
+    return 1;
+  case SK_CW:
+    buf[0] = (uint8_t)((uint16_t)w * cct / 255u);
+    return 1;
+  case SK_W:
+    buf[0] = w;
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+void KnxIpUsermod::clearSegmentColorKOs()
+{
+  _segKOs.clear();
+  _segSnap.clear();
+}
+
+// ------------------------------------------------------------------------------------
+// Register per-segment colour IN objects, all per-segment OUT objects (+ read responders)
+// Called at the end of registerSegmentKOs(), i.e. after GA_SEG_* arrays are filled.
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::registerSegmentColorKOs()
+{
+  clearSegmentColorKOs();
+  if (numSegments == 0)
+    return;
+
+  _segKOs.resize(numSegments);
+  _segSnap.resize(numSegments);
+  for (auto &sn : _segSnap)
+    sn.valid = false;
+
+  for (uint8_t s = 0; s < numSegments; s++)
+  {
+    SegColorKOs &ko = _segKOs[s];
+    memset(&ko, 0, sizeof(ko));
+    const Segment &seg = strip.getSegment(s);
+
+    // OUT objects that already existed (power/bri/fx) – mirror for unified publishing
+    ko.out[SK_PWR] = GA_SEG_OUT_PWR ? GA_SEG_OUT_PWR[s] : 0;
+    ko.out[SK_BRI] = GA_SEG_OUT_BRI ? GA_SEG_OUT_BRI[s] : 0;
+    ko.out[SK_FX] = GA_SEG_OUT_FX ? GA_SEG_OUT_FX[s] : 0;
+
+    // Segment 0 shares all GAs with the central objects (offset * 0), so it is fully
+    // handled by the central IN/OUT objects – nothing to register here.
+    if (segmentColorEnabled && s != 0)
+    {
+      const bool rgb = seg.hasRGB();
+      const bool cctCap = seg.isCCT();
+      const bool white = seg.hasWhite();
+
+      if (rgb)
+      {
+        ko.in[SK_RGB] = calculateSegmentGA(gaInRGB, s);
+        ko.out[SK_RGB] = calculateSegmentGA(gaOutRGB, s);
+      }
+      if (cctCap)
+      {
+        ko.in[SK_CCT] = calculateSegmentGA(gaInCct, s);
+        ko.in[SK_WW] = calculateSegmentGA(gaInWW, s);
+        ko.in[SK_CW] = calculateSegmentGA(gaInCW, s);
+        ko.out[SK_CCT] = calculateSegmentGA(gaOutCct, s);
+        ko.out[SK_WW] = calculateSegmentGA(gaOutWW, s);
+        ko.out[SK_CW] = calculateSegmentGA(gaOutCW, s);
+      }
+      if (white)
+      {
+        ko.in[SK_W] = calculateSegmentGA(gaInW, s);
+        ko.out[SK_W] = calculateSegmentGA(gaOutW, s);
+      }
+
+      // ---- IN objects ----
+      if (ko.in[SK_RGB])
+      {
+        KNX.addGroupObject(ko.in[SK_RGB], DptMain::DPT_232xx, false, true);
+        KNX.onGroup(ko.in[SK_RGB], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 3) onKnxSegmentRGB(s, p[0], p[1], p[2]); });
+      }
+      if (ko.in[SK_CCT])
+      {
+        KNX.addGroupObject(ko.in[SK_CCT], DptMain::DPT_7xx, false, true);
+        KNX.onGroup(ko.in[SK_CCT], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 2) onKnxSegmentCct(s, (uint16_t)((p[0] << 8) | p[1])); });
+      }
+      if (ko.in[SK_WW])
+      {
+        KNX.addGroupObject(ko.in[SK_WW], DptMain::DPT_5xx, false, true);
+        KNX.onGroup(ko.in[SK_WW], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 1) onKnxSegmentWhiteSplit(s, p[0], -1); });
+      }
+      if (ko.in[SK_CW])
+      {
+        KNX.addGroupObject(ko.in[SK_CW], DptMain::DPT_5xx, false, true);
+        KNX.onGroup(ko.in[SK_CW], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 1) onKnxSegmentWhiteSplit(s, -1, p[0]); });
+      }
+      if (ko.in[SK_W])
+      {
+        KNX.addGroupObject(ko.in[SK_W], DptMain::DPT_5xx, false, true);
+        KNX.onGroup(ko.in[SK_W], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 1) onKnxSegmentWhite(s, p[0]); });
+      }
+    }
+
+    // ---- OUT objects (+ read responders) ----
+    // Segment 0 OUT == central OUT: central publishing/read responder already covers it.
+    for (uint8_t k = 0; k < SK_COUNT; k++)
+    {
+      const uint16_t ga = ko.out[k];
+      if (!ga)
+        continue;
+      if (s == 0)
+      {
+        // On segment 0 every OUT GA equals its central counterpart (offset * 0).
+        ko.out[k] = 0;
+        continue;
+      }
+      if (!KNX.hasGroupObject(ga))
+        KNX.addGroupObject(ga, segKindDpt((SegKind)k), true, false);
+      if (answerReadRequests)
+      {
+        const SegKind kind = (SegKind)k;
+        attachReadResponder(ga, segKindDpt(kind), [this, s, kind](uint8_t *buf)
+                            { return encodeSegmentValue(s, kind, buf); });
+      }
+    }
+  }
+
+  KNX_UM_DEBUGF("[KNX-UM] Per-segment colour/status objects registered for %d segments\n", numSegments);
+}
+
+// ------------------------------------------------------------------------------------
+// Send per-segment status objects whose value changed since the last send.
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::publishSegmentStatusIfChanged(bool force)
+{
+  if (!enabled || !KNX.running() || _segKOs.empty())
+    return;
+
+  const uint8_t n = (uint8_t)std::min<size_t>(_segKOs.size(), strip.getSegmentsNum());
+  for (uint8_t s = 0; s < n; s++)
+  {
+    const SegColorKOs &ko = _segKOs[s];
+    SegSnapshot &sn = _segSnap[s];
+    for (uint8_t k = 0; k < SK_COUNT; k++)
+    {
+      const uint16_t ga = ko.out[k];
+      if (!ga)
+        continue;
+      uint8_t buf[3] = {0, 0, 0};
+      const uint8_t len = encodeSegmentValue(s, (SegKind)k, buf);
+      if (len == 0)
+        continue;
+      const bool changed = force || !sn.valid || sn.len[k] != len || memcmp(sn.val[k], buf, len) != 0;
+      if (!changed)
+        continue;
+      // first snapshot after (re)registration: just remember, do not flood the bus
+      if (sn.valid || force)
+        KNX.groupValueWrite(ga, buf, len);
+      sn.len[k] = len;
+      memcpy(sn.val[k], buf, len);
+    }
+    sn.valid = true;
+  }
+}
+
+// ------------------------------------------------------------------------------------
+// Read responders for the central OUT objects (encoding identical to publishState()).
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::registerCentralReadResponders()
+{
+  if (!answerReadRequests)
+    return;
+
+  attachReadResponder(GA_OUT_PWR, DptMain::DPT_1xx, [](uint8_t *b)
+                      { b[0] = (bri > 0) ? 1 : 0; return (uint8_t)1; });
+  attachReadResponder(GA_OUT_BRI, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = KnxIpCore::packScaling(segPct(bri)); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_FX, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = effectCurrent; return (uint8_t)1; });
+  attachReadResponder(GA_OUT_PRE, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = currentPreset; return (uint8_t)1; });
+
+  // colour objects: same source as publishState() (segment 0)
+  attachReadResponder(GA_OUT_R, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = R(strip.getSegment(0).colors[0]); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_G, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = G(strip.getSegment(0).colors[0]); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_B, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = B(strip.getSegment(0).colors[0]); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_W, DptMain::DPT_5xx, [](uint8_t *b)
+                      { b[0] = W(strip.getSegment(0).colors[0]); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_CCT, DptMain::DPT_7xx, [this](uint8_t *b)
+                      { return encodeSegmentValue(0, SK_CCT, b); });
+  attachReadResponder(GA_OUT_WW, DptMain::DPT_5xx, [this](uint8_t *b)
+                      { return encodeSegmentValue(0, SK_WW, b); });
+  attachReadResponder(GA_OUT_CW, DptMain::DPT_5xx, [this](uint8_t *b)
+                      { return encodeSegmentValue(0, SK_CW, b); });
+  attachReadResponder(GA_OUT_RGB, DptMain::DPT_232xx, [this](uint8_t *b)
+                      { return encodeSegmentValue(0, SK_RGB, b); });
+  attachReadResponder(GA_OUT_RGBW, DptMain::DPT_251xx, [](uint8_t *b)
+                      {
+    const uint32_t c = strip.getSegment(0).colors[0];
+    b[0] = R(c); b[1] = G(c); b[2] = B(c); b[3] = W(c); b[4] = 0; b[5] = 0;
+    return (uint8_t)6; });
+
+  // HSV composites
+  auto hsvNow = [](float &h, float &s, float &v)
+  {
+    const uint32_t c = strip.getSegment(0).colors[0];
+    rgbToHsv(R(c), G(c), B(c), h, s, v);
+  };
+  attachReadResponder(GA_OUT_HSV, DptMain::DPT_232xx, [hsvNow](uint8_t *b)
+                      {
+    float h, s, v; hsvNow(h, s, v);
+    b[0] = hueDegToByte(h); b[1] = pct01ToByte(s); b[2] = pct01ToByte(v);
+    return (uint8_t)3; });
+  attachReadResponder(GA_OUT_H, DptMain::DPT_5xx, [hsvNow](uint8_t *b)
+                      { float h, s, v; hsvNow(h, s, v); b[0] = hueDegToByte(h); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_S, DptMain::DPT_5xx, [hsvNow](uint8_t *b)
+                      { float h, s, v; hsvNow(h, s, v); b[0] = pct01ToByte(s); return (uint8_t)1; });
+  attachReadResponder(GA_OUT_V, DptMain::DPT_5xx, [hsvNow](uint8_t *b)
+                      { float h, s, v; hsvNow(h, s, v); b[0] = pct01ToByte(v); return (uint8_t)1; });
+}
+
+// ------------------------------------------------------------------------------------
+// Per-segment colour handlers (KNX → WLED)
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::onKnxSegmentCct(uint8_t segmentIndex, uint16_t kelvin)
+{
+  if (segmentIndex >= strip.getSegmentsNum())
+    return;
+  Segment &seg = strip.getSegment(segmentIndex);
+  // kelvinToCct255() maps kelvinMin..kelvinMax (strip WW..CW) onto 0..255;
+  // a value <= 255 is taken by setCCT() as relative CCT.
+  seg.setCCT(kelvinToCct255(kelvin));
+  KNX_UM_DEBUGF("[KNX-UM] Segment %d CCT: %uK (cct=%u)\n", segmentIndex, kelvin, seg.cct);
+  stateUpdated(CALL_MODE_DIRECT_CHANGE);
+}
+
+void KnxIpUsermod::onKnxSegmentWhiteSplit(uint8_t segmentIndex, int16_t wwIn, int16_t cwIn)
+{
+  if (segmentIndex >= strip.getSegmentsNum())
+    return;
+  Segment &seg = strip.getSegment(segmentIndex);
+  const uint32_t c = seg.colors[0];
+  const uint8_t wLive = W(c);
+  const uint8_t cctLive = seg.cct;
+
+  const uint8_t wwLive = (uint8_t)(((uint16_t)wLive * (255u - cctLive) + 127u) / 255u);
+  const uint8_t cwLive = (uint8_t)(((uint16_t)wLive * cctLive + 127u) / 255u);
+  const uint8_t ww = (wwIn < 0) ? wwLive : (uint8_t)wwIn;
+  const uint8_t cw = (cwIn < 0) ? cwLive : (uint8_t)cwIn;
+
+  const uint16_t sum = (uint16_t)ww + (uint16_t)cw;
+  const uint8_t newW = (sum > 255) ? 255 : (uint8_t)sum;
+  const uint8_t newCct = (sum == 0) ? cctLive : (uint8_t)((cw * 255u + sum / 2) / sum);
+
+  seg.setColor(0, RGBW32(R(c), G(c), B(c), newW));
+  seg.setCCT(newCct);
+  if (newW > 0 && autoEnableOnColor && !seg.on)
+    seg.setOption(SEG_OPTION_ON, true);
+  KNX_UM_DEBUGF("[KNX-UM] Segment %d WW=%u CW=%u -> W=%u cct=%u\n", segmentIndex, ww, cw, newW, newCct);
+  stateUpdated(CALL_MODE_DIRECT_CHANGE);
+}
+
+void KnxIpUsermod::onKnxSegmentWhite(uint8_t segmentIndex, uint8_t w)
+{
+  if (segmentIndex >= strip.getSegmentsNum())
+    return;
+  Segment &seg = strip.getSegment(segmentIndex);
+  const uint32_t c = seg.colors[0];
+  seg.setColor(0, RGBW32(R(c), G(c), B(c), w));
+  KNX_UM_DEBUGF("[KNX-UM] Segment %d W=%u\n", segmentIndex, w);
+  stateUpdated(CALL_MODE_DIRECT_CHANGE);
+}
