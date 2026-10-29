@@ -1,0 +1,77 @@
+name: KNX firmware
+
+# Builds the WLED + KNX_IP firmware for the boards used in the house and publishes
+# the .bin files as a GitHub Release ("knx-latest") for easy download.
+on:
+  push:
+    branches: [ "knx-*", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - dig-next-2-knx
+          - gledopto-015wl-d-knx
+          - dig-Quad-V3
+          - custom_esp32dev_knx_ip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install PlatformIO
+        run: pip install -r requirements.txt
+      - name: Use KNX build configuration
+        run: cp usermods/KNX_IP/platformio_override_KNX_IP.ini platformio_override.ini
+      - name: Build firmware
+        run: pio run -e ${{ matrix.environment }}
+      - name: Collect binaries
+        run: |
+          mkdir -p out
+          cp .pio/build/${{ matrix.environment }}/firmware.bin out/${{ matrix.environment }}.bin
+          ls build_output/release/*.bin 2>/dev/null && cp build_output/release/*.bin out/ || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.environment }}
+          path: out/*.bin
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result != 'cancelled'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List files
+        run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: knx-latest
+          name: KNX firmware (latest build of ${{ github.ref_name }})
+          prerelease: true
+          make_latest: false
+          files: dist/*.bin
+          body: |
+            Automatisch gebaut aus `${{ github.ref_name }}` (${{ github.sha }}).
+            - dig-next-2-knx.bin – QuinLED Dig-Next-2
+            - gledopto-015wl-d-knx.bin – Gledopto GL-C-015WL-D
+            - dig-Quad-V3.bin – QuinLED Dig-Quad V3
+            - custom_esp32dev_knx_ip.bin – generischer ESP32
+            Update ueber WLED: Einstellungen -> Security & Updates -> Manual OTA Update.
