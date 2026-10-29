@@ -10,11 +10,14 @@
 //    * GroupValue_Read on any central or per-segment OUT object is answered with the
 //      current value (needed after HA restart, GT2/visualisation start-up, ETS "Read").
 //
-//  Per-segment GAs are derived from the central GA strings with the existing
-//  offset scheme (segment_offset_L/M/N), exactly like the Power/Bri/FX objects:
-//      GA(seg n) = central + n * (L/M/N)
-//  Segment 0 therefore always equals the central GA; to avoid double registration
-//  segment 0 is skipped for IN objects that are already registered centrally.
+//    * per-segment start/stop dimming (brightness + colour temperature), see dimming.cpp
+//
+//  Per-segment GAs are derived from the central GA strings with the offset scheme
+//  (segment_offset_L/M/N), exactly like the Power/Bri/FX objects:
+//      segment_ga_start_at_1 = true  (default): GA(seg n) = central + (n+1) * (L/M/N)
+//      segment_ga_start_at_1 = false (original): GA(seg n) = central + n * (L/M/N)
+//  In the original scheme segment 0 equals the central GA and is handled centrally;
+//  any segment GA identical to its central GA is therefore never registered twice.
 // =====================================================================================
 
 #include "usermod_knx_ip.h"
@@ -75,6 +78,8 @@ void KnxIpUsermod::appendSegmentCentralGAs(std::vector<const char *> &list) cons
   list.push_back(gaInWW);
   list.push_back(gaInCW);
   list.push_back(gaInW);
+  list.push_back(gaInBriRel);
+  list.push_back(gaInCctRel);
   list.push_back(gaOutRGB);
   list.push_back(gaOutCct);
   list.push_back(gaOutWW);
@@ -139,6 +144,8 @@ void KnxIpUsermod::clearSegmentColorKOs()
 {
   _segKOs.clear();
   _segSnap.clear();
+  _segDimBri.clear();
+  _segDimCct.clear();
 }
 
 // ------------------------------------------------------------------------------------
@@ -153,6 +160,8 @@ void KnxIpUsermod::registerSegmentColorKOs()
 
   _segKOs.resize(numSegments);
   _segSnap.resize(numSegments);
+  _segDimBri.assign(numSegments, DimRamp());
+  _segDimCct.assign(numSegments, DimRamp());
   for (auto &sn : _segSnap)
     sn.valid = false;
 
@@ -167,9 +176,7 @@ void KnxIpUsermod::registerSegmentColorKOs()
     ko.out[SK_BRI] = GA_SEG_OUT_BRI ? GA_SEG_OUT_BRI[s] : 0;
     ko.out[SK_FX] = GA_SEG_OUT_FX ? GA_SEG_OUT_FX[s] : 0;
 
-    // Segment 0 shares all GAs with the central objects (offset * 0), so it is fully
-    // handled by the central IN/OUT objects – nothing to register here.
-    if (segmentColorEnabled && s != 0)
+    if (segmentColorEnabled)
     {
       const bool rgb = seg.hasRGB();
       const bool cctCap = seg.isCCT();
@@ -194,6 +201,16 @@ void KnxIpUsermod::registerSegmentColorKOs()
         ko.in[SK_W] = calculateSegmentGA(gaInW, s);
         ko.out[SK_W] = calculateSegmentGA(gaOutW, s);
       }
+      // start/stop dimming per segment
+      ko.in[SK_BRI_REL] = calculateSegmentGA(gaInBriRel, s);
+      if (cctCap)
+        ko.in[SK_CCT_REL] = calculateSegmentGA(gaInCctRel, s);
+
+      // A segment GA identical to its central GA (original scheme, segment 0) is handled centrally.
+      const char *centralIn[SK_COUNT] = {nullptr, nullptr, nullptr, gaInRGB, gaInCct, gaInWW, gaInCW, gaInW, gaInBriRel, gaInCctRel};
+      for (uint8_t k = SK_RGB; k < SK_COUNT; k++)
+        if (ko.in[k] && centralIn[k] && ko.in[k] == parseCentralGA(centralIn[k]))
+          ko.in[k] = 0;
 
       // ---- IN objects ----
       if (ko.in[SK_RGB])
@@ -220,6 +237,18 @@ void KnxIpUsermod::registerSegmentColorKOs()
         KNX.onGroup(ko.in[SK_CW], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
                     { if (svc == KnxService::GroupValue_Write && p && len >= 1) onKnxSegmentWhiteSplit(s, -1, p[0]); });
       }
+      if (ko.in[SK_BRI_REL])
+      {
+        KNX.addGroupObject(ko.in[SK_BRI_REL], DptMain::DPT_3xx, false, true);
+        KNX.onGroup(ko.in[SK_BRI_REL], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 1) startDim(s, false, p[0] & 0x0F); });
+      }
+      if (ko.in[SK_CCT_REL])
+      {
+        KNX.addGroupObject(ko.in[SK_CCT_REL], DptMain::DPT_3xx, false, true);
+        KNX.onGroup(ko.in[SK_CCT_REL], [this, s](uint16_t, DptMain, KnxService svc, const uint8_t *p, uint8_t len)
+                    { if (svc == KnxService::GroupValue_Write && p && len >= 1) startDim(s, true, p[0] & 0x0F); });
+      }
       if (ko.in[SK_W])
       {
         KNX.addGroupObject(ko.in[SK_W], DptMain::DPT_5xx, false, true);
@@ -235,9 +264,10 @@ void KnxIpUsermod::registerSegmentColorKOs()
       const uint16_t ga = ko.out[k];
       if (!ga)
         continue;
-      if (s == 0)
+      const char *centralOut[SK_COUNT] = {gaOutPower, gaOutBri, gaOutFx, gaOutRGB, gaOutCct, gaOutWW, gaOutCW, gaOutW, nullptr, nullptr};
+      if (centralOut[k] && ga == parseCentralGA(centralOut[k]))
       {
-        // On segment 0 every OUT GA equals its central counterpart (offset * 0).
+        // identical to the central status object (original scheme, segment 0): published centrally
         ko.out[k] = 0;
         continue;
       }
@@ -298,8 +328,8 @@ void KnxIpUsermod::registerCentralReadResponders()
   if (!answerReadRequests)
     return;
 
-  attachReadResponder(GA_OUT_PWR, DptMain::DPT_1xx, [](uint8_t *b)
-                      { b[0] = (bri > 0) ? 1 : 0; return (uint8_t)1; });
+  attachReadResponder(GA_OUT_PWR, DptMain::DPT_1xx, [this](uint8_t *b)
+                      { b[0] = roomLit() ? 1 : 0; return (uint8_t)1; });
   attachReadResponder(GA_OUT_BRI, DptMain::DPT_5xx, [](uint8_t *b)
                       { b[0] = KnxIpCore::packScaling(segPct(bri)); return (uint8_t)1; });
   attachReadResponder(GA_OUT_FX, DptMain::DPT_5xx, [](uint8_t *b)

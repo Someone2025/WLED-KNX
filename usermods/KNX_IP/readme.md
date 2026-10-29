@@ -51,3 +51,24 @@ Config keys: `segment_color_objects` (bool, default true), `answer_read_requests
 
 Note: `cct_kelvin_min` / `cct_kelvin_max` should be set to the real warm/cold white
 colour temperature of the strip – Kelvin values are mapped linearly onto WLED's 0..255 CCT.
+
+## Start/stop dimming (DPT 3.007) and switching individual sections
+
+* **Relative dimming is a real ramp now**: "increase/decrease 100 %" starts a ramp, the STOP
+  telegram (sent by KNX push buttons such as the MDT Glastaster II on release) stops it.
+  Smaller step codes (50 % … 1.56 %) ramp by that amount and stop by themselves.
+  Works for the central brightness (`GA in: bri_rel`), the colour temperature
+  (`GA in: cct_rel`, new, as sent by the MDT Glastaster II "Farbtemperatur relativ ändern")
+  and per segment (same GAs + segment offset).
+* Dimming up from off switches on at `dim_min_pct`; dimming down stops at `dim_min_pct`
+  (or switches off if `dim_down_switch_off`). Ramp times: `dim_time_ms`, `cct_dim_time_ms`.
+  While ramping, the WLED transition is set to 0 and restored afterwards.
+* **Sections (segments) on/off**: segment ON while the room is off switches the master on
+  (other sections keep their state). Central ON switches all segments on
+  (`master_on_all_segments`, default true). The central power status is "on" only if at least
+  one segment is actually lit.
+* Central Kelvin / CCT now applies to **all** active segments (one room = one colour temperature);
+  per-segment Kelvin objects exist separately.
+* **`segment_ga_start_at_1` (default true)**: GA(segment n) = central + (n+1) × offset, so
+  segment 0 has its own GAs as well and the central GAs control the whole room.
+  Set to false for the original scheme (segment 0 == central).

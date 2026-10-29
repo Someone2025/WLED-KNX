@@ -16,7 +16,7 @@ uint32_t KnxIpUsermod::computeGATableHash() const
   // Hash all GA strings
   const char *gaStrings[] = {
       gaInPower, gaInBri, gaInR, gaInG, gaInB, gaInW, gaInCct, gaInWW, gaInCW, gaInH, gaInS, gaInV, gaInFx, gaInPreset, gaInRGB, gaInHSV, gaInRGBW, gaInTime, gaInDate, gaInDateTime,
-      gaInBriRel, gaInRRel, gaInGRel, gaInBRel, gaInWRel, gaInWWRel, gaInCWRel, gaInHRel, gaInSRel, gaInVRel, gaInFxRel, gaInRGBRel, gaInHSVRel, gaInRGBWRel,
+      gaInBriRel, gaInCctRel, gaInRRel, gaInGRel, gaInBRel, gaInWRel, gaInWWRel, gaInCWRel, gaInHRel, gaInSRel, gaInVRel, gaInFxRel, gaInRGBRel, gaInHSVRel, gaInRGBWRel,
       gaOutPower, gaOutBri, gaOutR, gaOutG, gaOutB, gaOutW, gaOutCct, gaOutWW, gaOutCW, gaOutH, gaOutS, gaOutV, gaOutFx, gaOutPreset, gaOutRGB, gaOutHSV, gaOutRGBW,
       gaOutIntTemp, gaOutTemp, gaOutIntTempAlarm, gaOutTempAlarm};
   for (const char *s : gaStrings)
@@ -218,6 +218,8 @@ bool KnxIpUsermod::validateIndividualAddressString(const char *s)
   return parsePA(s) != 0;
 }
 
+uint16_t KnxIpUsermod::parseCentralGA(const char *s) const { return parseGA(s); }
+
 // Calculate per-segment GA from central GA + segment offset
 uint16_t KnxIpUsermod::calculateSegmentGA(const char *centralGA, uint8_t segmentIndex) const
 {
@@ -233,10 +235,12 @@ uint16_t KnxIpUsermod::calculateSegmentGA(const char *centralGA, uint8_t segment
   uint8_t centralMiddle = (centralParsed >> 8) & 0x07; // bits 10-8
   uint8_t centralSub = centralParsed & 0xFF;           // bits 7-0
 
-  // Calculate segment address: Segment N = (main + L*N, middle + M*N, sub + N*N)
-  uint16_t newMain = centralMain + (segmentOffsetL * segmentIndex);
-  uint16_t newMiddle = centralMiddle + (segmentOffsetM * segmentIndex);
-  uint16_t newSub = centralSub + (segmentOffsetN * segmentIndex);
+  // Calculate segment address: Segment N = (main + L*k, middle + M*k, sub + N*k)
+  // with k = N (original scheme, segment 0 == central) or k = N+1 (segmentGaFromOne)
+  const uint16_t k = (uint16_t)segmentIndex + (segmentGaFromOne ? 1u : 0u);
+  uint16_t newMain = centralMain + (segmentOffsetL * k);
+  uint16_t newMiddle = centralMiddle + (segmentOffsetM * k);
+  uint16_t newSub = centralSub + (segmentOffsetN * k);
 
   // Validate KNX limits
   if (newMain > 31 || newMiddle > 7 || newSub > 255)
@@ -279,6 +283,8 @@ std::vector<uint16_t> KnxIpUsermod::getAllUsedGAs(bool includeRegisteredSegmentG
   addGA(gaInCct);
   addGA(gaInWW);
   addGA(gaInCW);
+  addGA(gaInBriRel);
+  addGA(gaInCctRel);
 
   // Essential central output GAs
   addGA(gaOutPower);
@@ -453,8 +459,9 @@ bool KnxIpUsermod::hasGAConflicts(uint8_t maxSegments) const
         // This segment GA matches a central GA - check if it's from segment 0
         for (int i = 0; i < numCentralGAs; i++)
         {
+          // only valid in the original scheme: segment 0 GA == its OWN central GA
           uint16_t seg0GA = calculateSegmentGA(centralGAs[i], 0);
-          if (seg0GA == segGA)
+          if (!segmentGaFromOne && seg0GA == segGA && seg0GA == parseGA(centralGAs[i]))
           {
             isValidSegment0Match = true;
             break;
@@ -1138,9 +1145,11 @@ void KnxIpUsermod::onKnxPower(bool on)
     {
       bri = (briLast > 0) ? briLast : 128;
     }
+    switchSegmentsForMasterOn(); // otherwise "on" can stay dark if all segments were switched off
   }
   else
   {
+    _dimBri.active = false;
     briLast = bri;
     bri = 0;
   }
@@ -1151,9 +1160,14 @@ void KnxIpUsermod::onKnxPower(bool on)
 void KnxIpUsermod::onKnxBrightness(uint8_t pct)
 {
   pct = clamp100(pct);
+  _dimBri.active = false;
   bri = pct_to_0_255(pct);
   if (bri > 0)
+  {
     strip.setBrightness(bri);
+    if (!anySegmentLit())
+      switchSegmentsForMasterOn();
+  }
   stateUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1329,19 +1343,8 @@ void KnxIpUsermod::adjustWhiteSplitRel(int16_t delta, bool adjustWarm)
 
 void KnxIpUsermod::onKnxBrightnessRel(uint8_t dpt3)
 {
-  int16_t d = knx_step_delta(dpt3 & 0x0F, 255);
-  if (!d)
-    return;
-  int val = (int)bri + d;
-  if (val < 0)
-    val = 0;
-  else if (val > 255)
-    val = 255;
-  bri = (uint8_t)val;
-  if (bri > 0)
-    strip.setBrightness(bri);
-  stateUpdated(CALL_MODE_DIRECT_CHANGE);
-  scheduleStatePublish();
+  // DPT 3.007 start/stop dimming (ramp until STOP or end of range) – see usermod_knx_ip_dimming.cpp
+  startDim(-1, false, dpt3 & 0x0F);
 }
 
 void KnxIpUsermod::onKnxColorRel(uint8_t channel, uint8_t dpt3)
@@ -1597,9 +1600,16 @@ void KnxIpUsermod::onKnxWhite(uint8_t v)
 }
 
 void KnxIpUsermod::onKnxCct(uint16_t kelvin)
-{ // Kelvin (DPT 7.600)
-  Segment &seg = strip.getSegment(0);
-  seg.cct = kelvinToCct255(kelvin);
+{ // Kelvin (DPT 7.600) – applies to all active segments (per-segment CCT objects exist separately)
+  _dimCct.active = false;
+  const uint8_t cct = kelvinToCct255(kelvin);
+  const uint8_t n = strip.getSegmentsNum();
+  for (uint8_t i = 0; i < n; i++)
+  {
+    Segment &seg = strip.getSegment(i);
+    if (seg.isActive())
+      seg.setCCT(cct);
+  }
   stateUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1790,11 +1800,26 @@ void KnxIpUsermod::onKnxSegmentPower(uint8_t segmentIndex, bool on)
     return;
 
   Segment &segment = strip.getSegment(segmentIndex);
-  segment.on = on;
+  if (segmentIndex < _segDimBri.size())
+    _segDimBri[segmentIndex].active = false;
+  if (on)
+  {
+    if (segment.opacity == 0)
+      segment.setOpacity(255);
+    segment.setOption(SEG_OPTION_ON, true);
+    // switching a section on while the room (master) is off: switch the master on too,
+    // otherwise the section stays dark. Other sections keep their state.
+    if (bri == 0)
+      bri = (briLast > 0) ? briLast : 255;
+  }
+  else
+  {
+    segment.setOption(SEG_OPTION_ON, false);
+  }
 
   KNX_UM_DEBUGF("[KNX-UM] Segment %d power: %s\n", segmentIndex, on ? "ON" : "OFF");
   stateUpdated(CALL_MODE_DIRECT_CHANGE);
-  // Note: Don't call scheduleStatePublish() to avoid feedback loops
+  scheduleStatePublish(); // central status (room lit?) may change; segment status is polled
 }
 
 void KnxIpUsermod::onKnxSegmentBrightness(uint8_t segmentIndex, uint8_t pct)
@@ -1806,12 +1831,23 @@ void KnxIpUsermod::onKnxSegmentBrightness(uint8_t segmentIndex, uint8_t pct)
   uint8_t bri255 = pct_to_0_255(pct);
 
   Segment &segment = strip.getSegment(segmentIndex);
-  segment.opacity = bri255;
+  if (segmentIndex < _segDimBri.size())
+    _segDimBri[segmentIndex].active = false;
   if (bri255 > 0)
-    segment.on = true;
+  {
+    segment.setOpacity(bri255);
+    segment.setOption(SEG_OPTION_ON, true);
+    if (bri == 0)
+      bri = (briLast > 0) ? briLast : 255;
+  }
+  else
+  {
+    segment.setOption(SEG_OPTION_ON, false); // 0 % = off, keep last opacity for next ON
+  }
 
   KNX_UM_DEBUGF("[KNX-UM] Segment %d brightness: %d%% (%d/255)\n", segmentIndex, pct, bri255);
   stateUpdated(CALL_MODE_DIRECT_CHANGE);
+  scheduleStatePublish();
 }
 
 void KnxIpUsermod::onKnxSegmentRGB(uint8_t segmentIndex, uint8_t r, uint8_t g, uint8_t b)
@@ -2382,6 +2418,7 @@ String KnxIpUsermod::getGATableHTML() const
   addRow("Date", gaInDate, "", true);
   addRow("DateTime", gaInDateTime, "", true);
   addRow("Brightness Rel", gaInBriRel);
+  addRow("CCT Rel", gaInCctRel);
   addRow("Red Rel", gaInRRel);
   addRow("Green Rel", gaInGRel);
   addRow("Blue Rel", gaInBRel);
@@ -2467,6 +2504,7 @@ void KnxIpUsermod::setup()
   validateOrClear(gaInDate, "gaInDate");
   validateOrClear(gaInDateTime, "gaInDateTime");
   validateOrClear(gaInBriRel, "gaInBriRel");
+  validateOrClear(gaInCctRel, "gaInCctRel");
   validateOrClear(gaInRRel, "gaInRRel");
   validateOrClear(gaInGRel, "gaInGRel");
   validateOrClear(gaInBRel, "gaInBRel");
@@ -2933,6 +2971,9 @@ void KnxIpUsermod::setup()
   // Answer GroupValue_Read on the central status objects
   registerCentralReadResponders();
 
+  // Start/stop dimming of colour temperature (central); brightness uses GA_IN_BRI_REL
+  registerDimmingKOs();
+
   // Register per-segment KOs
   registerSegmentKOs();
 
@@ -3039,7 +3080,7 @@ void KnxIpUsermod::publishState()
   }
 
   // Base state
-  const bool pwr = (bri > 0);
+  const bool pwr = roomLit();
   const uint8_t pct = (uint8_t)((bri * 100u + 127u) / 255u); // 0..100 (DPT 5.001)
   const uint8_t fxIndex = effectCurrent;                     // 0..255
 
@@ -3173,7 +3214,7 @@ void KnxIpUsermod::scheduleStatePublish()
   }
 
   // Smart change detection: only set pending flags for things that actually changed
-  bool curOn = (bri > 0);
+  bool curOn = roomLit();
 
   // Get current CCT and RGBW values
   const Segment &seg = strip.getSegment(0);
@@ -3418,6 +3459,9 @@ void KnxIpUsermod::loop()
 
   KNX.loop();
 
+  // Start/stop dimming ramps (brightness / colour temperature, central + per segment)
+  processDimRamps();
+
   // GUI-driven changes now unified: we trigger scheduleStatePublish() elsewhere (handlers or periodic).
   // Light color/effect changes occurring outside KNX handlers rely on LAST_* snapshot differences handled
   // in scheduleStatePublish() via _pendingTxColor flag. To avoid over-chatter, we maintain a debounce window.
@@ -3508,10 +3552,16 @@ void KnxIpUsermod::addToConfig(JsonObject &root)
   top["Temperature Alarm Hysteresis"] = tempAlarmHystC;
   top["auto_enable_on_color"] = autoEnableOnColor;
   top["auto_enable_brightness"] = autoEnableBrightness;
+  top["dim_time_ms"] = dimTimeMs;
+  top["cct_dim_time_ms"] = cctDimTimeMs;
+  top["dim_min_pct"] = dimMinPct;
+  top["dim_down_switch_off"] = dimDownSwitchOff;
+  top["master_on_all_segments"] = masterOnAllSegments;
   top["segment_offset_L"] = segmentOffsetL;
   top["segment_offset_M"] = segmentOffsetM;
   top["segment_offset_N"] = segmentOffsetN;
   top["segment_color_objects"] = segmentColorEnabled;
+  top["segment_ga_start_at_1"] = segmentGaFromOne;
   top["answer_read_requests"] = answerReadRequests;
 
   JsonObject gIn = top.createNestedObject("GA in");
@@ -3536,6 +3586,7 @@ void KnxIpUsermod::addToConfig(JsonObject &root)
   gIn["date"] = gaInDate;
   gIn["datetime"] = gaInDateTime;
   gIn["bri_rel"] = gaInBriRel;   // DPT 3.007 step/direction
+  gIn["cct_rel"] = gaInCctRel;   // DPT 3.007 relative colour temperature (start/stop)
   gIn["r_rel"] = gaInRRel;       // DPT 3.007
   gIn["g_rel"] = gaInGRel;       // DPT 3.007
   gIn["b_rel"] = gaInBRel;       // DPT 3.007
@@ -3597,18 +3648,34 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
   commRxDedupMs = top["communication_rx_dedup"] | commRxDedupMs;
   autoEnableOnColor = top["auto_enable_on_color"] | autoEnableOnColor;
   autoEnableBrightness = top["auto_enable_brightness"] | autoEnableBrightness;
+  dimTimeMs = top["dim_time_ms"] | dimTimeMs;
+  cctDimTimeMs = top["cct_dim_time_ms"] | cctDimTimeMs;
+  dimMinPct = top["dim_min_pct"] | dimMinPct;
+  if (dimMinPct < 1)
+    dimMinPct = 1;
+  if (dimMinPct > 100)
+    dimMinPct = 100;
+  if (dimTimeMs < 200)
+    dimTimeMs = 200;
+  if (cctDimTimeMs < 200)
+    cctDimTimeMs = 200;
+  dimDownSwitchOff = top["dim_down_switch_off"] | dimDownSwitchOff;
+  masterOnAllSegments = top["master_on_all_segments"] | masterOnAllSegments;
   if (autoEnableBrightness > 255)
     autoEnableBrightness = 255;
   const uint8_t prevOffL = segmentOffsetL, prevOffM = segmentOffsetM, prevOffN = segmentOffsetN;
+  const uint16_t prevCctRel = parseGA(gaInCctRel);
   const bool prevSegColor = segmentColorEnabled;
   const bool prevAnswerReads = answerReadRequests;
+  const bool prevGaFromOne = segmentGaFromOne;
   segmentOffsetL = top["segment_offset_L"] | segmentOffsetL;
   segmentOffsetM = top["segment_offset_M"] | segmentOffsetM;
   segmentOffsetN = top["segment_offset_N"] | segmentOffsetN;
   segmentColorEnabled = top["segment_color_objects"] | segmentColorEnabled;
   answerReadRequests = top["answer_read_requests"] | answerReadRequests;
+  segmentGaFromOne = top["segment_ga_start_at_1"] | segmentGaFromOne;
   // offsets / segment features change the registered GA set -> force a rebuild
-  const bool segFeatureChanged = (prevSegColor != segmentColorEnabled) || (prevAnswerReads != answerReadRequests) ||
+  const bool segFeatureChanged = (prevSegColor != segmentColorEnabled) || (prevAnswerReads != answerReadRequests) || (prevGaFromOne != segmentGaFromOne) ||
                                  (prevOffL != segmentOffsetL) || (prevOffM != segmentOffsetM) || (prevOffN != segmentOffsetN);
   if (segmentOffsetL > 31)
     segmentOffsetL = 31;
@@ -3648,6 +3715,7 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
     strlcpy(gaInDate, gIn["date"] | gaInDate, sizeof(gaInDate));
     strlcpy(gaInDateTime, gIn["datetime"] | gaInDateTime, sizeof(gaInDateTime));
     strlcpy(gaInBriRel, gIn["bri_rel"] | gaInBriRel, sizeof(gaInBriRel));     // DPT 3.007
+    strlcpy(gaInCctRel, gIn["cct_rel"] | gaInCctRel, sizeof(gaInCctRel));     // DPT 3.007
     strlcpy(gaInRRel, gIn["r_rel"] | gaInRRel, sizeof(gaInRRel));             // DPT 3.007
     strlcpy(gaInGRel, gIn["g_rel"] | gaInGRel, sizeof(gaInGRel));             // DPT 3.007
     strlcpy(gaInBRel, gIn["b_rel"] | gaInBRel, sizeof(gaInBRel));             // DPT 3.007
@@ -3702,6 +3770,7 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
   validateOrClear(gaInDate, "gaInDate");
   validateOrClear(gaInDateTime, "gaInDateTime");
   validateOrClear(gaInBriRel, "gaInBriRel");
+  validateOrClear(gaInCctRel, "gaInCctRel");
   validateOrClear(gaInRRel, "gaInRRel");
   validateOrClear(gaInGRel, "gaInGRel");
   validateOrClear(gaInBRel, "gaInBRel");
@@ -3944,7 +4013,8 @@ bool KnxIpUsermod::readFromConfig(JsonObject &root)
   }
 
   // ---- rebuild vs. tweak ----
-  const bool rebuildNeeded = anyGAChanged || !prevEnabled || segFeatureChanged;
+  const bool cctRelChanged = (prevCctRel != parseGA(gaInCctRel));
+  const bool rebuildNeeded = anyGAChanged || !prevEnabled || segFeatureChanged || cctRelChanged;
 
   if (rebuildNeeded)
   {
@@ -4129,6 +4199,13 @@ void KnxIpUsermod::appendConfigData(Print &uiScript)
   uiScript.print(F("addInfo(ux+':cct_kelvin_max',1,' [K]');"));
   uiScript.print(F("addInfo(ux+':segment_color_objects',1,' per-segment RGB/CCT/WW/CW/W + status (GA = central + offset*n)');"));
   uiScript.print(F("addInfo(ux+':answer_read_requests',1,' answer GroupValue_Read on status GAs');"));
+  uiScript.print(F("addInfo(ux+':segment_ga_start_at_1',1,' segment n uses central + (n+1)*offset (segment 0 gets own GAs)');"));
+  uiScript.print(F("addInfo(ux+':dim_time_ms',1,' [ms] start/stop dimming 0..100 %');"));
+  uiScript.print(F("addInfo(ux+':cct_dim_time_ms',1,' [ms] start/stop dimming warm..cold');"));
+  uiScript.print(F("addInfo(ux+':dim_min_pct',1,' [%] minimum when dimming down / start when dimming up from off');"));
+  uiScript.print(F("addInfo(ux+':dim_down_switch_off',1,' dimming down below minimum switches off');"));
+  uiScript.print(F("addInfo(ux+':master_on_all_segments',1,' central ON switches all segments on');"));
+  uiScript.print(F("addInfo(uxIn+':cct_rel',1,' [-] (DPT 3.007) start/stop');"));
   // Periodic interval units
   uiScript.print(F("addInfo(ux+':periodic_enabled',1,' [-]');"));
   uiScript.print(F("addInfo(ux+':periodic_interval_ms',1,' [ms]');"));

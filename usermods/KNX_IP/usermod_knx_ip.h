@@ -178,6 +178,8 @@ public:
     SK_WW,      // DPT 5.010 warm-white component
     SK_CW,      // DPT 5.010 cold-white component
     SK_W,       // DPT 5.010 white channel
+    SK_BRI_REL, // DPT 3.007 relative dimming (IN only, start/stop ramp)
+    SK_CCT_REL, // DPT 3.007 relative colour temperature (IN only, start/stop ramp)
     SK_COUNT
   };
   struct SegColorKOs
@@ -194,6 +196,10 @@ public:
 
   bool segmentColorEnabled = true; // register per-segment RGB/CCT/WW/CW/W objects + segment status
   bool answerReadRequests = true;  // reply to GroupValue_Read on status (OUT) objects
+  // true: GA(segment n) = central + (n+1)*offset, so every segment (incl. segment 0) has its own GAs
+  //       and the central GAs control the whole room.  false: original scheme, segment 0 == central.
+  bool segmentGaFromOne = true;
+  uint16_t parseCentralGA(const char *s) const; // validated "x/y/z" parse (0 = invalid/empty)
 
   void registerSegmentColorKOs();                                   // called at end of registerSegmentKOs()
   void clearSegmentColorKOs();                                      // called from clearSegmentKOs()
@@ -204,6 +210,31 @@ public:
   void onKnxSegmentCct(uint8_t segmentIndex, uint16_t kelvin);
   void onKnxSegmentWhiteSplit(uint8_t segmentIndex, int16_t ww, int16_t cw); // -1 = keep component
   void onKnxSegmentWhite(uint8_t segmentIndex, uint8_t w);
+
+  // --- Start/stop dimming (DPT 3.007) for brightness and colour temperature (usermod_knx_ip_dimming.cpp) ---
+  // KNX wall switches (e.g. MDT Glastaster II) send "brighter/darker 100%" on press and a STOP telegram
+  // on release. The actuator has to ramp until STOP or until the end of the range.
+  char gaInCctRel[16] = "1/1/29";  // DPT 3.007 relative colour temperature (central); per segment via offsets
+  uint16_t dimTimeMs = 5000;       // ramp time for 0..100 % brightness
+  uint16_t cctDimTimeMs = 5000;    // ramp time for full warm..cold range
+  uint8_t dimMinPct = 1;           // lowest brightness reached by dimming down (and start value when dimming up from off)
+  bool dimDownSwitchOff = false;   // true: dimming down below the minimum switches the light off
+  bool masterOnAllSegments = true; // central ON switches all segments on (otherwise only if none is lit)
+
+  struct DimRamp
+  {
+    bool active = false;
+    bool up = true;
+    float pos = 0;
+    int16_t target = 0;
+    uint32_t lastMs = 0;
+  };
+  void registerDimmingKOs();                                   // called from setup()
+  void startDim(int16_t segment, bool cct, uint8_t nibble);    // segment -1 = central
+  void processDimRamps();                                      // called from loop()
+  bool anySegmentLit() const;                                  // at least one active segment on with opacity > 0
+  bool roomLit() const { return bri > 0 && anySegmentLit(); }  // used for central power status
+  void switchSegmentsForMasterOn();
 
   // GA table for Info panel display
   String getGATableHTML() const;
@@ -261,6 +292,14 @@ private:
   uint32_t _lastSegPollMs = 0;
   uint16_t _lastSegCount = 0xFFFF;
   uint32_t _segCountChangedAt = 0;
+
+  // Dimming ramps
+  uint16_t GA_IN_CCT_REL = 0;
+  DimRamp _dimBri, _dimCct;                  // central
+  std::vector<DimRamp> _segDimBri, _segDimCct; // per segment (sized to numSegments)
+  uint32_t _lastDimTickMs = 0;
+  bool _dimTransitionOverride = false;
+  uint16_t _savedTransition = 0;
 
   // Track last preset value we set (used for OUT if configured)
   uint8_t _lastPreset = 0;

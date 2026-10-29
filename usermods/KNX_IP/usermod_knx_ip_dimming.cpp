@@ -1,0 +1,285 @@
+// =====================================================================================
+//  KNX_IP usermod – start/stop dimming (DPT 3.007) for brightness and colour temperature.
+//
+//  KNX wall switches (MDT Glastaster II, most other KNX push buttons) dim like this:
+//    long press   -> "increase/decrease 100 %"  (DPT 3.007, step code 1)
+//    release      -> "STOP"                      (DPT 3.007, step code 0)
+//  The actuator ramps until STOP arrives or the end of the range is reached.
+//  Step codes 2..7 (50 % .. 1.56 %) ramp by that amount and stop by themselves; this also
+//  covers senders that dim cyclically with small steps.
+//
+//  Targets:
+//    central brightness  -> WLED master brightness `bri`         (GA "bri_rel")
+//    central CCT         -> CCT of all active segments          (GA "cct_rel")
+//    segment brightness  -> segment opacity                      (GA "bri_rel" + offset*n)
+//    segment CCT         -> segment CCT                          (GA "cct_rel" + offset*n)
+//
+//  While a ramp runs, WLED's transition is set to 0 so the ramp itself is the fade.
+// =====================================================================================
+
+#include "usermod_knx_ip.h"
+
+extern KnxIpCore KNX;
+
+namespace
+{
+  constexpr uint32_t DIM_TICK_MS = 30; // ramp update interval
+
+  inline uint8_t minDimValue(uint8_t pct)
+  {
+    uint16_t v = (uint16_t)((pct * 255u + 50u) / 100u);
+    return (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
+  }
+}
+
+bool KnxIpUsermod::anySegmentLit() const
+{
+  const uint8_t n = strip.getSegmentsNum();
+  for (uint8_t i = 0; i < n; i++)
+  {
+    const Segment &s = strip.getSegment(i);
+    if (s.isActive() && s.on && s.opacity > 0)
+      return true;
+  }
+  return false;
+}
+
+// Central ON: make sure something is actually lit (all segments, or – if configured – only
+// when no segment is lit). Without this, "room on" after switching every segment off stays dark.
+void KnxIpUsermod::switchSegmentsForMasterOn()
+{
+  if (!masterOnAllSegments && anySegmentLit())
+    return;
+  const uint8_t n = strip.getSegmentsNum();
+  for (uint8_t i = 0; i < n; i++)
+  {
+    Segment &s = strip.getSegment(i);
+    if (!s.isActive())
+      continue;
+    if (s.opacity == 0)
+      s.setOpacity(255);
+    s.setOption(SEG_OPTION_ON, true);
+  }
+}
+
+void KnxIpUsermod::registerDimmingKOs()
+{
+  // Central brightness ramp uses the existing GA_IN_BRI_REL registration (onKnxBrightnessRel).
+  GA_IN_CCT_REL = parseCentralGA(gaInCctRel);
+  if (GA_IN_CCT_REL)
+  {
+    KNX.addGroupObject(GA_IN_CCT_REL, DptMain::DPT_3xx, false, true);
+    KNX.onGroup(GA_IN_CCT_REL, [this](uint16_t, DptMain, KnxService s, const uint8_t *p, uint8_t l)
+                { if (s == KnxService::GroupValue_Write && p && l >= 1) startDim(-1, true, p[0] & 0x0F); });
+  }
+}
+
+// ------------------------------------------------------------------------------------
+// Start (or stop) a ramp. segment = -1 for the central objects.
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::startDim(int16_t segment, bool cct, uint8_t nibble)
+{
+  nibble &= 0x0F;
+  const uint8_t code = nibble & 0x07;
+  const bool up = (nibble & 0x08) != 0;
+
+  DimRamp *ramp = nullptr;
+  if (segment < 0)
+    ramp = cct ? &_dimCct : &_dimBri;
+  else
+  {
+    if (segment >= strip.getSegmentsNum())
+      return;
+    std::vector<DimRamp> &v = cct ? _segDimCct : _segDimBri;
+    if ((size_t)segment >= v.size())
+      v.resize(segment + 1);
+    ramp = &v[segment];
+  }
+
+  // STOP
+  if (code == 0)
+  {
+    ramp->active = false;
+    KNX_UM_DEBUGF("[KNX-UM] Dim STOP seg=%d cct=%d\n", segment, cct);
+    return;
+  }
+
+  const uint8_t minVal = minDimValue(dimMinPct);
+  const int16_t lo = cct ? 0 : (dimDownSwitchOff ? 0 : minVal);
+  const int16_t hi = 255;
+
+  // current value
+  int16_t cur;
+  if (cct)
+    cur = (segment < 0) ? strip.getSegment(0).cct : strip.getSegment(segment).cct;
+  else if (segment < 0)
+    cur = bri;
+  else
+  {
+    const Segment &s = strip.getSegment(segment);
+    cur = (s.on && bri > 0) ? s.opacity : 0;
+  }
+
+  if (!cct)
+  {
+    if (cur == 0 && !up)
+      return; // already off – nothing to dim down
+    if (cur == 0 && up)
+    {
+      // dimming up from off: switch on at the minimum and ramp from there
+      cur = minVal;
+      if (segment < 0)
+      {
+        bri = minVal;
+        switchSegmentsForMasterOn();
+      }
+      else
+      {
+        Segment &s = strip.getSegment(segment);
+        s.setOpacity(minVal);
+        s.setOption(SEG_OPTION_ON, true);
+        if (bri == 0)
+          bri = (briLast > 0) ? briLast : 255;
+      }
+      stateUpdated(CALL_MODE_DIRECT_CHANGE);
+    }
+  }
+
+  // step size: code 1 = 100 %, code n = 100 % / 2^(n-1)
+  const int16_t delta = (code == 1) ? 255 : (int16_t)std::max(1, 255 >> (code - 1));
+  // a further small step in the same direction while a ramp is running extends the target
+  const int16_t base = (ramp->active && ramp->up == up && code > 1) ? ramp->target : cur;
+  int16_t target = up ? base + delta : base - delta;
+  if (target < lo)
+    target = lo;
+  if (target > hi)
+    target = hi;
+
+  ramp->active = (target != cur);
+  ramp->up = up;
+  ramp->pos = cur;
+  ramp->target = target;
+  ramp->lastMs = millis();
+
+  if (ramp->active && !_dimTransitionOverride)
+  {
+    _savedTransition = strip.getTransition();
+    strip.setTransition(0);
+    _dimTransitionOverride = true;
+  }
+  KNX_UM_DEBUGF("[KNX-UM] Dim START seg=%d cct=%d up=%d code=%u %d->%d\n", segment, cct, up, code, cur, target);
+}
+
+// ------------------------------------------------------------------------------------
+// Advance all running ramps (called from loop()).
+// ------------------------------------------------------------------------------------
+void KnxIpUsermod::processDimRamps()
+{
+  const uint32_t now = millis();
+  if (now - _lastDimTickMs < DIM_TICK_MS)
+    return;
+  _lastDimTickMs = now;
+
+  bool anyActive = false;
+  bool changed = false;
+
+  auto advance = [&](DimRamp &r, bool cct, int16_t &outVal) -> bool
+  {
+    if (!r.active)
+      return false;
+    const uint32_t dt = now - r.lastMs;
+    r.lastMs = now;
+    const uint16_t t = cct ? cctDimTimeMs : dimTimeMs;
+    const float step = 255.0f * (float)dt / (float)(t ? t : 1);
+    if (r.up)
+    {
+      r.pos += step;
+      if (r.pos >= r.target)
+      {
+        r.pos = r.target;
+        r.active = false;
+      }
+    }
+    else
+    {
+      r.pos -= step;
+      if (r.pos <= r.target)
+      {
+        r.pos = r.target;
+        r.active = false;
+      }
+    }
+    outVal = (int16_t)lroundf(r.pos);
+    if (r.active)
+      anyActive = true;
+    return true;
+  };
+
+  int16_t v;
+  // central brightness
+  if (advance(_dimBri, false, v))
+  {
+    const uint8_t nv = (uint8_t)v;
+    if (nv != bri)
+    {
+      if (nv == 0)
+        briLast = bri; // switching off by dimming: keep last brightness for next ON
+      bri = nv;
+      changed = true;
+    }
+  }
+  // central colour temperature -> all active segments
+  if (advance(_dimCct, true, v))
+  {
+    const uint8_t n = strip.getSegmentsNum();
+    for (uint8_t i = 0; i < n; i++)
+    {
+      Segment &s = strip.getSegment(i);
+      if (s.isActive() && s.cct != (uint8_t)v)
+      {
+        s.setCCT((uint8_t)v);
+        changed = true;
+      }
+    }
+  }
+  // per segment
+  const uint8_t nseg = strip.getSegmentsNum();
+  for (uint8_t i = 0; i < nseg; i++)
+  {
+    Segment &s = strip.getSegment(i);
+    if (i < _segDimBri.size() && advance(_segDimBri[i], false, v))
+    {
+      if (v == 0)
+      {
+        s.setOption(SEG_OPTION_ON, false);
+        changed = true;
+      }
+      else if (s.opacity != (uint8_t)v)
+      {
+        s.setOpacity((uint8_t)v);
+        changed = true;
+      }
+    }
+    if (i < _segDimCct.size() && advance(_segDimCct[i], true, v))
+    {
+      if (s.cct != (uint8_t)v)
+      {
+        s.setCCT((uint8_t)v);
+        changed = true;
+      }
+    }
+  }
+
+  if (changed)
+  {
+    stateUpdated(CALL_MODE_DIRECT_CHANGE);
+    scheduleStatePublish();
+  }
+
+  // all ramps finished -> restore configured transition
+  if (!anyActive && _dimTransitionOverride)
+  {
+    strip.setTransition(_savedTransition);
+    _dimTransitionOverride = false;
+  }
+}
