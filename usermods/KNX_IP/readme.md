@@ -1,5 +1,7 @@
 # KNX IP Usermod
 
+> **Deutsche Schritt-für-Schritt-Anleitung (QuinLED Dig-Next-2):** [docs/ANLEITUNG-DIG-NEXT-2-KNX.md](../../docs/ANLEITUNG-DIG-NEXT-2-KNX.md)
+
 This usermod enables KNX/EIB integration for WLED, allowing control of LED strips and segments via KNX bus communication.
 
 ## Installation
@@ -72,3 +74,6 @@ colour temperature of the strip – Kelvin values are mapped linearly onto WLED'
 * **`segment_ga_start_at_1` (default true)**: GA(segment n) = central + (n+1) × offset, so
   segment 0 has its own GAs as well and the central GAs control the whole room.
   Set to false for the original scheme (segment 0 == central).
+
+
+**All group addresses default to empty** (object disabled) – configure only the GAs you use.

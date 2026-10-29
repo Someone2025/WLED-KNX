@@ -41,68 +41,70 @@ public:
   // Helper to compute a hash of all GA strings and segment offsets
   uint32_t computeGATableHash() const;
 
+  // All group addresses default to empty (= object disabled). Configure only what you use,
+  // otherwise WLED would listen/send on GAs that belong to other functions in your ETS project.
   // Inbound GAs (commands from KNX -> WLED)
-  char gaInPower[16] = "1/0/1";    // DPT 1.001 (switch)
-  char gaInBri[16] = "1/0/2";      // DPT 5.001 (0..100%)
-  char gaInR[16] = "1/1/1";        // DPT 5.010 (0..255)
-  char gaInG[16] = "1/1/2";        // DPT 5.010 (0..255)
-  char gaInB[16] = "1/1/3";        // DPT 5.010 (0..255)
-  char gaInW[16] = "1/1/4";        // DPT 5.010 (0..255)
-  char gaInCct[16] = "1/1/5";      // DPT 7.600 (Kelvin)
-  char gaInWW[16] = "1/1/6";       // DPT 5.010 (0..255)
-  char gaInCW[16] = "1/1/7";       // DPT 5.010 (0..255)
-  char gaInH[16] = "1/1/8";        // DPT 5.003 (Hue 0..360° scaled to 0..255)
-  char gaInS[16] = "1/1/9";        // DPT 5.001 (0..100% -> 0..255)
-  char gaInV[16] = "1/1/10";       // DPT 5.001 (0..100% -> 0..255)
-  char gaInFx[16] = "1/1/11";      // DPT 5.xxx (0..255)
-  char gaInPreset[16] = "1/1/12";  // DPT 5.xxx (0..255)
-  char gaInRGB[16] = "1/1/13";     // DPST-232-600, 3 bytes [R,G,B]
-  char gaInHSV[16] = "1/1/14";     // DPST-232-600, 3 bytes [H_byte,S_byte,V_byte]
-  char gaInRGBW[16] = "1/1/15";    // DPST-251-600, 6 bytes [R,G,B,W,ext1,ext2]
-  char gaInTime[16] = "1/7/1";     // DPT 10.001, TimeOfDay (3 bytes)
-  char gaInDate[16] = "1/7/2";     // DPT 11.001, Date (3 bytes)
-  char gaInDateTime[16] = "1/7/3"; // DPT 19.001, DateTime (8 bytes)
+  char gaInPower[16] = "";    // DPT 1.001 (switch)
+  char gaInBri[16] = "";      // DPT 5.001 (0..100%)
+  char gaInR[16] = "";        // DPT 5.010 (0..255)
+  char gaInG[16] = "";        // DPT 5.010 (0..255)
+  char gaInB[16] = "";        // DPT 5.010 (0..255)
+  char gaInW[16] = "";        // DPT 5.010 (0..255)
+  char gaInCct[16] = "";      // DPT 7.600 (Kelvin)
+  char gaInWW[16] = "";       // DPT 5.010 (0..255)
+  char gaInCW[16] = "";       // DPT 5.010 (0..255)
+  char gaInH[16] = "";        // DPT 5.003 (Hue 0..360° scaled to 0..255)
+  char gaInS[16] = "";        // DPT 5.001 (0..100% -> 0..255)
+  char gaInV[16] = "";       // DPT 5.001 (0..100% -> 0..255)
+  char gaInFx[16] = "";      // DPT 5.xxx (0..255)
+  char gaInPreset[16] = "";  // DPT 5.xxx (0..255)
+  char gaInRGB[16] = "";     // DPST-232-600, 3 bytes [R,G,B]
+  char gaInHSV[16] = "";     // DPST-232-600, 3 bytes [H_byte,S_byte,V_byte]
+  char gaInRGBW[16] = "";    // DPST-251-600, 6 bytes [R,G,B,W,ext1,ext2]
+  char gaInTime[16] = "";     // DPT 10.001, TimeOfDay (3 bytes)
+  char gaInDate[16] = "";     // DPT 11.001, Date (3 bytes)
+  char gaInDateTime[16] = ""; // DPT 19.001, DateTime (8 bytes)
   // NEW: Relative adjustment inbound GAs using DPT 3.007 (4-bit step+direction, "Dimmen Relativ")
   // each telegram encodes one relative step (no continuous ramp maintained here).
   // Mapping (bit3=direction 0=decrease 1=increase, bits2..0 step code):
   // 0=STOP (ignored), 1=100, 2=50, 3=25, 4=12, 5=6, 6=3, 7=1 (% of full scale for brightness, scaled for channels)
-  char gaInBriRel[16] = "1/0/3";   // DPT 3.007 relative brightness
-  char gaInRRel[16] = "1/1/16";    // DPT 3.007 relative Red
-  char gaInGRel[16] = "1/1/17";    // DPT 3.007 relative Green
-  char gaInBRel[16] = "1/1/18";    // DPT 3.007 relative Blue
-  char gaInWRel[16] = "1/1/19";    // DPT 3.007 relative White
-  char gaInWWRel[16] = "1/1/20";   // DPT 3.007 relative Warm component (translated to W+CCT)
-  char gaInCWRel[16] = "1/1/21";   // DPT 3.007 relative Cold component (translated to W+CCT)
-  char gaInHRel[16] = "1/1/22";    // DPT 3.007 relative Hue (treated as step degrees)
-  char gaInSRel[16] = "1/1/23";    // DPT 3.007 relative Sat
-  char gaInVRel[16] = "1/1/24";    // DPT 3.007 relative Value
-  char gaInFxRel[16] = "1/1/25";   // DPT 3.007 relative Effect index
-  char gaInRGBRel[16] = "1/1/26";  // DPST-232-600 relative RGB (3 bytes: R,G,B each DPT3 low nibble)
-  char gaInHSVRel[16] = "1/1/27";  // DPST-232-600 relative HSV (3 bytes: H,S,V each DPT3 low nibble)
-  char gaInRGBWRel[16] = "1/1/28"; // DPST-251-600 relative RGBW (4 or 6 bytes: R,G,B,W DPT3)
+  char gaInBriRel[16] = "";   // DPT 3.007 relative brightness
+  char gaInRRel[16] = "";    // DPT 3.007 relative Red
+  char gaInGRel[16] = "";    // DPT 3.007 relative Green
+  char gaInBRel[16] = "";    // DPT 3.007 relative Blue
+  char gaInWRel[16] = "";    // DPT 3.007 relative White
+  char gaInWWRel[16] = "";   // DPT 3.007 relative Warm component (translated to W+CCT)
+  char gaInCWRel[16] = "";   // DPT 3.007 relative Cold component (translated to W+CCT)
+  char gaInHRel[16] = "";    // DPT 3.007 relative Hue (treated as step degrees)
+  char gaInSRel[16] = "";    // DPT 3.007 relative Sat
+  char gaInVRel[16] = "";    // DPT 3.007 relative Value
+  char gaInFxRel[16] = "";   // DPT 3.007 relative Effect index
+  char gaInRGBRel[16] = "";  // DPST-232-600 relative RGB (3 bytes: R,G,B each DPT3 low nibble)
+  char gaInHSVRel[16] = "";  // DPST-232-600 relative HSV (3 bytes: H,S,V each DPT3 low nibble)
+  char gaInRGBWRel[16] = ""; // DPST-251-600 relative RGBW (4 or 6 bytes: R,G,B,W DPT3)
 
   // Outbound GAs (state feedback WLED -> KNX)
-  char gaOutPower[16] = "2/0/1";        // DPT 1.011 (state)
-  char gaOutBri[16] = "2/0/2";          // DPT 5.001 (0..100%)
-  char gaOutR[16] = "2/1/1";            // DPT 5.010 (0..255)
-  char gaOutG[16] = "2/1/2";            // DPT 5.010 (0..255)
-  char gaOutB[16] = "2/1/3";            // DPT 5.010 (0..255)
-  char gaOutW[16] = "2/1/4";            // DPT 5.010 (0..255)
-  char gaOutCct[16] = "2/1/5";          // DPT 7.600 (Kelvin)
-  char gaOutWW[16] = "2/1/6";           // DPT 5.010 (0..255)
-  char gaOutCW[16] = "2/1/7";           // DPT 5.010 (0..255)
-  char gaOutH[16] = "2/1/8";            // DPT 5.003 (Hue)
-  char gaOutS[16] = "2/1/9";            // DPT 5.001 (S)
-  char gaOutV[16] = "2/1/10";           // DPT 5.001 (V)
-  char gaOutFx[16] = "2/1/11";          // DPT 5.xxx
-  char gaOutPreset[16] = "2/1/12";      // DPT 5.xxx (0..255)
-  char gaOutRGB[16] = "2/1/13";         // DPST-232-600, 3 bytes
-  char gaOutHSV[16] = "2/1/14";         // DPST-232-600, 3 bytes
-  char gaOutRGBW[16] = "2/1/15";        // DPST-251-600, 6 bytes
-  char gaOutIntTemp[16] = "2/2/1";      // DPST-14-68 (4-byte float °C)
-  char gaOutTemp[16] = "2/2/2";         // DPST-14-68 (4-byte float °C) - classic Temperature usermod
-  char gaOutIntTempAlarm[16] = "2/2/3"; // ESP internal temp alarm GA (1-bit Alarm)
-  char gaOutTempAlarm[16] = "2/2/4";    // Dallas temp alarm GA (1-bit Alarm)
+  char gaOutPower[16] = "";        // DPT 1.011 (state)
+  char gaOutBri[16] = "";          // DPT 5.001 (0..100%)
+  char gaOutR[16] = "";            // DPT 5.010 (0..255)
+  char gaOutG[16] = "";            // DPT 5.010 (0..255)
+  char gaOutB[16] = "";            // DPT 5.010 (0..255)
+  char gaOutW[16] = "";            // DPT 5.010 (0..255)
+  char gaOutCct[16] = "";          // DPT 7.600 (Kelvin)
+  char gaOutWW[16] = "";           // DPT 5.010 (0..255)
+  char gaOutCW[16] = "";           // DPT 5.010 (0..255)
+  char gaOutH[16] = "";            // DPT 5.003 (Hue)
+  char gaOutS[16] = "";            // DPT 5.001 (S)
+  char gaOutV[16] = "";           // DPT 5.001 (V)
+  char gaOutFx[16] = "";          // DPT 5.xxx
+  char gaOutPreset[16] = "";      // DPT 5.xxx (0..255)
+  char gaOutRGB[16] = "";         // DPST-232-600, 3 bytes
+  char gaOutHSV[16] = "";         // DPST-232-600, 3 bytes
+  char gaOutRGBW[16] = "";        // DPST-251-600, 6 bytes
+  char gaOutIntTemp[16] = "";      // DPST-14-68 (4-byte float °C)
+  char gaOutTemp[16] = "";         // DPST-14-68 (4-byte float °C) - classic Temperature usermod
+  char gaOutIntTempAlarm[16] = ""; // ESP internal temp alarm GA (1-bit Alarm)
+  char gaOutTempAlarm[16] = "";    // Dallas temp alarm GA (1-bit Alarm)
 
   // --- Alarm (DPST-1-5) configuration (°C thresholds) ---
   float intTempAlarmMaxC = 80.0f;    // trip threshold for ESP internal (°C)
@@ -214,7 +216,7 @@ public:
   // --- Start/stop dimming (DPT 3.007) for brightness and colour temperature (usermod_knx_ip_dimming.cpp) ---
   // KNX wall switches (e.g. MDT Glastaster II) send "brighter/darker 100%" on press and a STOP telegram
   // on release. The actuator has to ramp until STOP or until the end of the range.
-  char gaInCctRel[16] = "1/1/29";  // DPT 3.007 relative colour temperature (central); per segment via offsets
+  char gaInCctRel[16] = "";  // DPT 3.007 relative colour temperature (central); per segment via offsets
   uint16_t dimTimeMs = 5000;       // ramp time for 0..100 % brightness
   uint16_t cctDimTimeMs = 5000;    // ramp time for full warm..cold range
   uint8_t dimMinPct = 1;           // lowest brightness reached by dimming down (and start value when dimming up from off)
