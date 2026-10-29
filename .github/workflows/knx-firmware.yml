@@ -43,7 +43,6 @@ jobs:
         run: |
           mkdir -p out
           cp .pio/build/${{ matrix.environment }}/firmware.bin out/${{ matrix.environment }}.bin
-          ls build_output/release/*.bin 2>/dev/null && cp build_output/release/*.bin out/ || true
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.environment }}
@@ -59,8 +58,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: package.json
       - name: List files
         run: ls -la dist
+      - name: Read WLED version
+        id: ver
+        run: echo "wled=$(jq -r .version src/package.json)" >> "$GITHUB_OUTPUT"
       - name: Remove outdated assets from the knx-latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,7 +84,7 @@ jobs:
           make_latest: false
           files: dist/*.bin
           body: |
-            Automatisch gebaut aus `${{ github.ref_name }}` (${{ github.sha }}).
+            WLED ${{ steps.ver.outputs.wled }} + KNX_IP, automatisch gebaut aus `${{ github.ref_name }}` (${{ github.sha }}).
             - dig-next-2-knx.bin – QuinLED Dig-Next-2
             - gledopto-015wl-d-knx.bin – Gledopto GL-C-015WL-D
             - dig-Quad-V3.bin – QuinLED Dig-Quad V3

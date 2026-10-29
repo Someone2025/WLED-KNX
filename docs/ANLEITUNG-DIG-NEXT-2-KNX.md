@@ -41,7 +41,7 @@ KNX-Taster (TP) ──► KNX-IP-Router ──► LAN/WLAN (VLAN, Multicast 224.
 Alle Builds liegen hier: **Releases → `knx-latest`**
 <https://github.com/Someone2025/WLED-KNX/releases/tag/knx-latest>
 
-Für den Dig-Next-2: **`dig-next-2-knx.bin`** (identisch mit `WLED_16.0.1_Dig-Next-2-KNX.bin`).
+Für den Dig-Next-2: **`dig-next-2-knx.bin`**. Die enthaltene WLED-Version steht im Beschreibungstext des Releases.
 
 Jede Änderung am Branch `main` baut GitHub automatisch neu; der Download-Link bleibt gleich.
 
