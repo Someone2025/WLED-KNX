@@ -6,7 +6,8 @@
 | 📖 **Anleitung** | [docs/ANLEITUNG-DIG-NEXT-2-KNX.md](docs/ANLEITUNG-DIG-NEXT-2-KNX.md) |
 | ⚙️ **KNX-Usermod** | [usermods/KNX_IP](usermods/KNX_IP/readme.md) |
 
-Basis: WLED 16.0.1. Die Firmware wird bei jeder Änderung an `main` automatisch von GitHub gebaut.
+Basis: offizielles **WLED 16.0.1** ([wled/WLED](https://github.com/wled/WLED), Tag `v16.0.1`). Der KNX-Usermod stammt ursprünglich von Franz Reisenhofer ([u20p17/WLED](https://github.com/u20p17/WLED), Branch `WLED_v16.0.0`) und wurde hier erweitert.
+Die Firmware wird bei jeder Änderung an `main` automatisch von GitHub gebaut.
 
 ---
 
