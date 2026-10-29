@@ -24,13 +24,12 @@ To silence warnings (not generally recommended) add:
 to your `build_flags`. This converts `KNX_UM_WARN*` macros into no-ops as well.
 
 ## Enabling Debug Logs (PlatformIO)
-Add a build flag for the environment you are using (example for a custom ESP32 dev environment) in `platformio_override.ini`:
+Add a build flag for the environment you are using (example for the Dig-Next-2 environment) in `platformio_override.ini`:
 
 ```
-[env:custom_esp32dev_knx_ip]
-extends = env:esp32dev
-build_flags = 
-  ${common.build_flags}
+[env:dig-next-2-knx]
+build_flags = ${common.build_flags} ${esp32.build_flags}
+  ... (existing flags) ...
   -DKNX_UM_DEBUG
 ```
 
@@ -38,7 +37,7 @@ If you already have a `build_flags` section, just append `-DKNX_UM_DEBUG` on its
 
 Rebuild and flash:
 ```
-pio run -e custom_esp32dev_knx_ip -t upload
+pio run -e dig-next-2-knx -t upload
 ```
 
 ## What You Will See

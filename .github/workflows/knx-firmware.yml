@@ -1,6 +1,6 @@
 name: KNX firmware
 
-# Builds the WLED + KNX_IP firmware for the boards used in the house and publishes
+# Builds the WLED + KNX_IP firmware for the QuinLED Dig-Next-2 and publishes
 # the .bin files as a GitHub Release ("knx-latest") for easy download.
 on:
   push:
@@ -19,9 +19,6 @@ jobs:
       matrix:
         environment:
           - dig-next-2-knx
-          - gledopto-015wl-d-knx
-          - dig-Quad-V3
-          - custom_esp32dev_knx_ip
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,7 +83,4 @@ jobs:
           body: |
             WLED ${{ steps.ver.outputs.wled }} + KNX_IP, automatisch gebaut aus `${{ github.ref_name }}` (${{ github.sha }}).
             - dig-next-2-knx.bin – QuinLED Dig-Next-2
-            - gledopto-015wl-d-knx.bin – Gledopto GL-C-015WL-D
-            - dig-Quad-V3.bin – QuinLED Dig-Quad V3
-            - custom_esp32dev_knx_ip.bin – generischer ESP32
             Update ueber WLED: Einstellungen -> Security & Updates -> Manual OTA Update.
