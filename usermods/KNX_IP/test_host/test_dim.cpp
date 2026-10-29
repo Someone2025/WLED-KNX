@@ -124,6 +124,22 @@ int main(){
   assert(um.hasGAConflicts(3));
   printf("G ok: original scheme + conflict detection\n");
 
+  // --- H) HSV start/stop ramps (hue wraps, saturation clamps, STOP holds)
+  um.segmentOffsetN=10; um.colorDimTimeMs=1000;
+  for(int i=0;i<3;i++){ segs[i].on=true; segs[i].opacity=255; segs[i].colors[0]=RGBW32(255,0,0,10); }  // red, hue 0
+  um.onKnxHueRel(0x09);                       // hue up, full turn
+  run(um, 250);                               // ~90 deg -> greenish-yellow
+  um.onKnxHueRel(0x08);                       // STOP
+  { uint32_t c=segs[0].colors[0]; float h,s2,v2; KnxIpUsermod::rgbToHsv(R(c),G(c),B(c),h,s2,v2);
+    assert(h>70 && h<110 && W(c)==10);        // white channel preserved
+    run(um,300); uint32_t c2=segs[0].colors[0]; assert(c2==c); printf("H ok: hue %.0f\n",h); }
+  um.onKnxHueRel(0x01);                       // hue down (wraps below 0)
+  run(um, 500); um.onKnxHueRel(0x08);
+  { uint32_t c=segs[0].colors[0]; float h,s2,v2; KnxIpUsermod::rgbToHsv(R(c),G(c),B(c),h,s2,v2);
+    assert(h>250 && h<290); printf("H ok: wrapped hue %.0f\n",h); }
+  um.onKnxSatRel(0x01); run(um, 2000);        // saturation down to 0 -> white-ish (r==g==b)
+  { uint32_t c=segs[0].colors[0]; assert(R(c)==G(c) && G(c)==B(c)); printf("S ok\n"); }
+  um.onKnxHSVRel(0x0B,0,0); run(um,100); um.onKnxHSVRel(0,0,0); assert(!um._dimHue.active);
   printf("ALL DIM TESTS PASSED\n");
   return 0;
 }

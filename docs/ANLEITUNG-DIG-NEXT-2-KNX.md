@@ -3,7 +3,7 @@
 Diese Anleitung beschreibt, wie ein **QuinLED Dig-Next-2** mit der KNX-Firmware aus diesem Repository
 eingerichtet wird – vom Flashen bis zur Bedienung per KNX-Taster (z. B. MDT Glastaster II).
 
-> **Stand:** Firmware-Branch `knx-16.0.1` (WLED 16.0.1 + KNX_IP-Usermod).
+> **Stand:** Branch `main` (WLED 16.0.1 + KNX_IP-Usermod).
 > Die Firmware ist auf GitHub kompiliert, aber **noch nicht an echter Hardware getestet**.
 > Punkte, die noch nicht verifiziert sind, sind mit **[ungeprüft]** markiert.
 
@@ -43,7 +43,7 @@ Alle Builds liegen hier: **Releases → `knx-latest`**
 
 Für den Dig-Next-2: **`dig-next-2-knx.bin`** (identisch mit `WLED_16.0.1_Dig-Next-2-KNX.bin`).
 
-Jede Änderung am Branch `knx-16.0.1` baut GitHub automatisch neu; der Download-Link bleibt gleich.
+Jede Änderung am Branch `main` baut GitHub automatisch neu; der Download-Link bleibt gleich.
 
 Was in diesem Build schon voreingestellt ist:
 
@@ -131,6 +131,7 @@ Nummer (0, 1, 2 …) und damit ihre Gruppenadressen (Abschnitt 7.2).
 | `segment_color_objects` | an |
 | `answer_read_requests` | an – Taster/HA bekommen beim Start den aktuellen Zustand |
 | `dim_time_ms` / `cct_dim_time_ms` | Dauer der Dimmrampe 0→100 % bzw. warm→kalt (Standard 5000 ms) |
+| `color_dim_time_ms` | Dauer einer vollen Farbton-Drehung bzw. 0→100 % Sättigung/Helligkeit beim RGB-Dimmen (Standard 6000 ms) |
 | `dim_min_pct` | kleinste Helligkeit beim Runterdimmen (Standard 1 %) |
 | `dim_down_switch_off` | aus = Runterdimmen stoppt bei `dim_min_pct` |
 | `master_on_all_segments` | an = „Raum EIN“ schaltet alle Abschnitte ein |
@@ -182,6 +183,7 @@ sonst senden zwei Geräte auf dieselbe Rückmeldung.
 * **Raum ein:** alle Abschnitte gehen an (`master_on_all_segments`).
 * **Status „Raum ein“** ist nur dann „ein“, wenn wirklich ein Abschnitt leuchtet.
 * **Farbtemperatur zentral** gilt für alle Abschnitte; pro Abschnitt gibt es eigene Objekte.
+* **RGB per Taster** (z. B. GT2 „HSV Farbton/Sättigung/Helligkeit relativ ändern“): langer Druck = Farbe läuft, Loslassen = Stopp. Der Farbton dreht sich im Kreis.
 
 ## 8. Netzwerk (UniFi)
 
@@ -232,6 +234,6 @@ sonst senden zwei Geräte auf dieselbe Rückmeldung.
 ## 12. Bekannte Einschränkungen
 
 * Nur **KNX/IP Routing** (kein Tunneling, kein KNX Secure).
-* **RGB relativ** (Farbton/Sättigung/Helligkeit per 4-Bit) springt noch in Einzelschritten statt zu rampen.
+* Relative Einzelkanäle **R/G/B/W, WW/CW** (je 4 Bit) springen noch in Stufen; Farbton/Sättigung/Helligkeit (HSV) rampen.
 * Ändert man die Anzahl der Segmente, werden alte Abschnitts-Adressen nicht abgemeldet (harmlos).
 * Noch nicht an echter Hardware getestet.

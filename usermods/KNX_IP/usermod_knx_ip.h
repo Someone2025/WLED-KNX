@@ -237,6 +237,8 @@ public:
   bool anySegmentLit() const;                                  // at least one active segment on with opacity > 0
   bool roomLit() const { return bri > 0 && anySegmentLit(); }  // used for central power status
   void switchSegmentsForMasterOn();
+  uint16_t colorDimTimeMs = 6000; // ramp time for a full hue turn / 0..100 % saturation or value
+  void startHsvDim(uint8_t comp, uint8_t nibble); // comp: 0 = hue, 1 = saturation, 2 = value
 
   // GA table for Info panel display
   String getGATableHTML() const;
@@ -298,6 +300,8 @@ private:
   // Dimming ramps
   uint16_t GA_IN_CCT_REL = 0;
   DimRamp _dimBri, _dimCct;                  // central
+  DimRamp _dimHue, _dimSat, _dimVal;         // central colour (HSV) ramps
+  float _hsvH = 0, _hsvS = 0, _hsvV = 0;     // colour state while an HSV ramp runs
   std::vector<DimRamp> _segDimBri, _segDimCct; // per segment (sized to numSegments)
   uint32_t _lastDimTickMs = 0;
   bool _dimTransitionOverride = false;
