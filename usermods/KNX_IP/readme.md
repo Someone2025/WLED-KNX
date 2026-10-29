@@ -69,6 +69,13 @@ colour temperature of the strip – Kelvin values are mapped linearly onto WLED'
   (other sections keep their state). Central ON switches all segments on
   (`master_on_all_segments`, default true). The central power status is "on" only if at least
   one segment is actually lit.
+* **Colour ramps**: relative hue / saturation / value (HSV, as sent by the MDT Glastaster II) and the
+  relative single channels R / G / B / W / WW / CW (also the RGB / RGBW composites) ramp the same way;
+  ramp time for the full range: `color_dim_time_ms`.
+* **HSV memory**: hue and saturation are remembered, so dimming V to 0 (black) or S to 0 (white) and
+  back restores the colour, and the H/S status objects keep their value instead of jumping to 0°.
+  H/S/V are encoded as one byte 0..255 (= 0..360° / 0..100 %, DPT 5.003 / 5.001).
+* When WLED segments are deleted, their GAs are unregistered right away (no reboot needed).
 * Central Kelvin / CCT now applies to **all** active segments (one room = one colour temperature);
   per-segment Kelvin objects exist separately.
 * **`segment_ga_start_at_1` (default true)**: GA(segment n) = central + (n+1) × offset, so

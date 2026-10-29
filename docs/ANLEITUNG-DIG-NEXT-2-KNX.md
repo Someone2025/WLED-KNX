@@ -234,6 +234,4 @@ sonst senden zwei Geräte auf dieselbe Rückmeldung.
 ## 12. Bekannte Einschränkungen
 
 * Nur **KNX/IP Routing** (kein Tunneling, kein KNX Secure).
-* Relative Einzelkanäle **R/G/B/W, WW/CW** (je 4 Bit) springen noch in Stufen; Farbton/Sättigung/Helligkeit (HSV) rampen.
-* Ändert man die Anzahl der Segmente, werden alte Abschnitts-Adressen nicht abgemeldet (harmlos).
 * Noch nicht an echter Hardware getestet.

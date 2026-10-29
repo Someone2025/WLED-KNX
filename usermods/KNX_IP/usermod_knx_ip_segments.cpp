@@ -363,10 +363,10 @@ void KnxIpUsermod::registerCentralReadResponders()
     return (uint8_t)6; });
 
   // HSV composites
-  auto hsvNow = [](float &h, float &s, float &v)
+  auto hsvNow = [this](float &h, float &s, float &v)
   {
     const uint32_t c = strip.getSegment(0).colors[0];
-    rgbToHsv(R(c), G(c), B(c), h, s, v);
+    currentHsv(R(c), G(c), B(c), h, s, v);
   };
   attachReadResponder(GA_OUT_HSV, DptMain::DPT_232xx, [hsvNow](uint8_t *b)
                       {

@@ -190,6 +190,8 @@ public:
     return (it != _callbacks.end()) ? it->second : KnxGroupCallback();
   }
   bool hasGroupObject(uint16_t ga) const { return _gos.find(ga) != _gos.end(); }
+  // Unregister a GA (object + callback), e.g. when a WLED segment was deleted.
+  void removeGroupObject(uint16_t ga) { _gos.erase(ga); _callbacks.erase(ga); }
 
   // High-level send helpers (payload is raw KNX data; you can use packers below)
   bool groupValueWrite(uint16_t ga, const uint8_t* data, uint8_t len);
