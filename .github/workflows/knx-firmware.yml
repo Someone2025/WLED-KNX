@@ -4,7 +4,7 @@ name: KNX firmware
 # the .bin files as a GitHub Release ("knx-latest") for easy download.
 on:
   push:
-    branches: [ "knx-*", "main" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:

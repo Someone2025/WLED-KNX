@@ -1,3 +1,15 @@
+# WLED-KNX (Fork mit KNX/IP-Anbindung)
+
+| | |
+|---|---|
+| ⬇️ **Firmware herunterladen** | **[Releases → knx-latest](https://github.com/Someone2025/WLED-KNX/releases/tag/knx-latest)** – für den QuinLED Dig-Next-2: `dig-next-2-knx.bin` |
+| 📖 **Anleitung** | [docs/ANLEITUNG-DIG-NEXT-2-KNX.md](docs/ANLEITUNG-DIG-NEXT-2-KNX.md) |
+| ⚙️ **KNX-Usermod** | [usermods/KNX_IP](usermods/KNX_IP/readme.md) |
+
+Basis: WLED 16.0.1. Die Firmware wird bei jeder Änderung an `main` automatisch von GitHub gebaut.
+
+---
+
 <p align="center">
   <img src="/images/wled_logo_akemi.png">
   <a href="https://github.com/wled-dev/WLED/releases"><img src="https://img.shields.io/github/release/wled-dev/WLED.svg?style=flat-square"></a>
