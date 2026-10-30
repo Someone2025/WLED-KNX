@@ -4,6 +4,8 @@ Diese Anleitung beschreibt, wie ein **QuinLED Dig-Next-2** mit der KNX-Firmware 
 eingerichtet wird – vom Flashen bis zur Bedienung per KNX-Taster (z. B. MDT Glastaster II).
 
 > **Stand:** Branch `main` (WLED 16.0.1 + KNX_IP-Usermod).
+> **Gilt nur für den QuinLED Dig-Next-2** (QLD-NXT2, ESP32-PICO-V3-02, 8 MB Flash, 2 MB PSRAM).
+> Auf anderen ESP32-Boards passen Pins und Schaltausgänge nicht.
 > Die Firmware ist auf GitHub kompiliert, aber **noch nicht an echter Hardware getestet**.
 > Punkte, die noch nicht verifiziert sind, sind mit **[ungeprüft]** markiert.
 
@@ -15,7 +17,7 @@ eingerichtet wird – vom Flashen bis zur Bedienung per KNX-Taster (z. B. MDT Gl
 KNX-Taster (TP) ──► KNX-IP-Router ──► LAN/WLAN (VLAN, Multicast 224.0.23.12:3671)
                                                    │
                                                    ▼
-                                    Dig-Next-2 (WLED + KNX_IP) ──► WS2805-Streifen (RGB + CCT)
+                                    Dig-Next-2 (WLED + KNX_IP) ──► RGBCCT-Streifen (z. B. BTF FCOB Dual IC)
 ```
 
 * Der Controller spricht **KNXnet/IP Routing** (Multicast). **Tunneling und IP Secure werden nicht unterstützt.**
@@ -29,9 +31,9 @@ KNX-Taster (TP) ──► KNX-IP-Router ──► LAN/WLAN (VLAN, Multicast 224.
 
 | Teil | Hinweis |
 |---|---|
-| QuinLED **Dig-Next-2** | 2 Datenausgänge, 3 schaltbare Versorgungsausgänge (2× 5 A, 1× 10 A), 5–48 V |
-| LED-Streifen mit **WS2805** (RGB + CCT), 24 V | z. B. SuperLightingLED FCOB-24V-ARGBCCT-W15: 15 mm, 14 Pixel/m, kürzbar alle 71,42 mm, max. 26 W/m |
-| 24-V-Netzteil | Leistung nach Streifenlänge (bis 26 W/m bei voller Last) |
+| QuinLED **Dig-Next-2** (QLD-NXT2) | ESP32-PICO-V3-02, 2 Datenausgänge, 3 schaltbare Versorgungsausgänge (2× 5 A, 1× 10 A), 5–48 V |
+| Adressierbarer **RGBCCT**-Streifen, 24 V | **Voreingestellt:** BTF-LIGHTING FCOB „Dual IC“ RGBCCT 960 LEDs/m (Modell FCOB5M24V12MM960LRGBCCTICW30-EU): 12 mm, 16 Pixel/m, kürzbar alle 62,5 mm, 3 Pole (+, Daten, −). Alternativ WS2805-Streifen (dann Typ in WLED umstellen, Abschnitt 6.1) |
+| 24-V-Netzteil | Leistung nach Streifenlänge; Wert aus dem Datenblatt des Streifens [Leistung pro Meter ungeprüft] |
 | KNX-**IP-Router** mit Routing | z. B. Enertex KNXnet/IP Secure Router oder MDT SCN-IP100.03 |
 | WLAN im KNX-VLAN | Multicast muss durchkommen (siehe Abschnitt 8) |
 | ETS | zum Anlegen der Gruppenadressen und Verknüpfen mit den Tastern |
@@ -49,7 +51,8 @@ Was in diesem Build schon voreingestellt ist:
 
 | Einstellung | Wert |
 |---|---|
-| LED-Ausgang 1 / 2 | GPIO2 / GPIO4, Typ **WS2805**, je 14 Pixel (in WLED anpassen) |
+| Controller | QuinLED Dig-Next-2, ESP32-PICO-V3-02; gebaut als `esp32dev` mit 4-MB-Aufteilung (läuft auf den 8 MB, PSRAM wird nicht genutzt) |
+| LED-Ausgang 1 / 2 | GPIO2 / GPIO4, Typ **FW1906/WS2811 RGBCCT**, Farbreihenfolge **RGB**, je 16 Pixel = 1 m (in WLED anpassen) |
 | Tasten | GPIO34, GPIO35 |
 | Schaltausgänge (Multi-Relay) | GPIO21 = 10A_1, GPIO20 = 5A_1, GPIO22 = 5A_2, GPIO5 = externes Relais |
 | Strombegrenzer (ABL) | 6000 mA (passend zu 160 W / 24 V) |
@@ -80,25 +83,31 @@ Künftige Updates laufen immer über Schritt 5 – ohne Kabel.
 2. **Streifen-Versorgung** auf den **10A_1**-Ausgang (bei einem Raum mit bis zu ca. 6,7 A = 160 W).
    Längere Läufe auf zwei Ausgänge aufteilen (5A_1, 5A_2) und ggf. an beiden Enden einspeisen.
 3. **Daten** des Streifens auf **LED-Ausgang 1** (GPIO2).
-4. WS2805 ist ein Streifen mit **Dual Signal** (4 Pole: +, DI, BI, −). Wie die Backup-Datenleitung (BI)
-   am Anfang des Streifens angeschlossen wird, steht im WS2805-Datenblatt des Streifenherstellers
-   **[offen – vor der Montage prüfen]**.
+4. Der BTF-Dual-IC-Streifen hat **3 Pole** (+24 V, Daten, GND) – es gibt keine Backup-Datenleitung.
+   Fällt ein Chip aus, bleibt der Rest dahinter dunkel.
+   Bei einem **WS2805**-Streifen (4 Pole: +, DI, BI, −) steht im Datenblatt des Herstellers, wie BI angeschlossen
+   wird **[offen – vor der Montage prüfen]**.
 5. **Antenne** anschrauben und so legen, dass sie nicht direkt auf Metallprofilen liegt.
 
 > **Wichtig (laut QuinLED):** Ohne aktivierte Relais liefert der Dig-Next-2 **keinen Strom** an die Ausgänge.
 > In diesem Build sind die Relais voreingestellt. Prüfen unter **Config → Usermods → MultiRelay**:
 > Relais aktiviert, *external* **aus** (dann folgen sie dem Ein/Aus des Lichts).
 
-Damit ist der Streifen bei „Licht aus“ **stromlos** (WS2805-Chips ziehen sonst auch im Aus-Zustand Strom).
+Damit ist der Streifen bei „Licht aus“ **stromlos** (die Chips auf adressierbaren Streifen ziehen sonst auch im Aus-Zustand Strom).
 
 ## 6. WLED einrichten
 
 ### 6.1 LED-Einstellungen (Config → LED Preferences)
 
-* **Länge** je Ausgang = Anzahl **Pixel** (nicht LEDs!). Beim WS2805-COB: **14 Pixel pro Meter**
-  (1 Pixel = 71,42 mm = 60 LEDs). Beispiel: 5,5 m → 77 Pixel.
-* Typ ist bereits **WS2805 RGBCW**.
-* Farbreihenfolge testen: Weiß/Rot/Grün/Blau einzeln einstellen und prüfen, ob die richtige Farbe leuchtet.
+* **Länge** je Ausgang = Anzahl **Pixel** (nicht LEDs!).
+  BTF FCOB Dual IC 960 LEDs/m: **16 Pixel pro Meter** (1 Pixel = 62,5 mm). Beispiel: 5,5 m → 88 Pixel.
+  (Die 840-LEDs/m-Variante hat 14 Pixel/m, 71,5 mm.)
+* Typ ist bereits **FW1906/WS2811 RGBCCT**, Farbreihenfolge **RGB**. Laut Käuferberichten zeigt dieser Streifen
+  mit „WS2805“ falsche Farben – mit FW1906 stimmt es.
+  Für einen **WS2805**-Streifen den Typ auf **WS2805 RGBCW** umstellen (14 Pixel/m beim WS2805-COB).
+* Farbreihenfolge testen: Rot/Grün/Blau einzeln einstellen und prüfen, ob die richtige Farbe leuchtet.
+* **Warm-/Kaltweiß prüfen:** Farbtemperatur auf ganz warm stellen. Leuchtet es kalt, in den LED-Einstellungen
+  beim Ausgang **Swap: „WW & CW“** wählen (ein Käufer musste das bei diesem Streifen tun) [ungeprüft, ob bei jeder Charge nötig].
 * **Strombegrenzer** (ABL) auf das Netzteil abstimmen (Voreinstellung 6000 mA).
 
 ### 6.2 Verhalten beim Einschalten (Rückfallebene)
@@ -125,7 +134,7 @@ Nummer (0, 1, 2 …) und damit ihre Gruppenadressen (Abschnitt 7.2).
 |---|---|
 | `enabled` | an |
 | `individual_address` | Adresse auf der IP-Seite des Routers, z. B. `1.0.11` (eindeutig je Controller) |
-| `cct_kelvin_min` / `cct_kelvin_max` | **echte** Farbtemperaturen des Streifens, beim WS2805-COB **2700 / 6500** |
+| `cct_kelvin_min` / `cct_kelvin_max` | **echte** Farbtemperaturen des Streifens. BTF FCOB Dual IC: Herstellerangabe 3000 K warm, kalt 6000 K bzw. 6500 K (widersprüchlich) → **3000 / 6500** [ungeprüft]. WS2805-COB: 2700 / 6500 |
 | `segment_offset_L` / `M` / `N` | Abstand der Abschnitts-Adressen (siehe 7.2) |
 | `segment_ga_start_at_1` | **an** – auch Abschnitt 0 bekommt eigene Adressen |
 | `segment_color_objects` | an |

@@ -82,5 +82,6 @@ jobs:
           files: dist/*.bin
           body: |
             WLED ${{ steps.ver.outputs.wled }} + KNX_IP, automatisch gebaut aus `${{ github.ref_name }}` (${{ github.sha }}).
-            - dig-next-2-knx.bin – QuinLED Dig-Next-2
+            - dig-next-2-knx.bin – nur für QuinLED Dig-Next-2 (QLD-NXT2, ESP32-PICO-V3-02, 8 MB Flash). Nicht für andere ESP32-Boards.
+            Voreingestellt: LED-Ausgänge GPIO2/GPIO4, Typ FW1906/WS2811 RGBCCT (BTF FCOB Dual IC 24V), Farbreihenfolge RGB, je 16 Pixel; Schaltausgänge GPIO21/20/22/5.
             Update ueber WLED: Einstellungen -> Security & Updates -> Manual OTA Update.

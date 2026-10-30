@@ -2,7 +2,9 @@
 
 | | |
 |---|---|
-| ⬇️ **Firmware herunterladen** | **[Releases → knx-latest](https://github.com/Someone2025/WLED-KNX/releases/tag/knx-latest)** – für den QuinLED Dig-Next-2: `dig-next-2-knx.bin` |
+| ⬇️ **Firmware herunterladen** | **[Releases → knx-latest](https://github.com/Someone2025/WLED-KNX/releases/tag/knx-latest)** – `dig-next-2-knx.bin` |
+| 🎯 **Gilt für** | **nur QuinLED Dig-Next-2** (QLD-NXT2, ESP32-PICO-V3-02, 8 MB Flash) – nicht für andere ESP32-Boards |
+| 💡 **Voreingestellter Streifen** | BTF-LIGHTING FCOB Dual IC RGBCCT 24 V (WLED-Typ „FW1906/WS2811 RGBCCT“, RGB, 16 Pixel/m) – andere Streifen in WLED umstellbar |
 | 📖 **Anleitung** | [docs/ANLEITUNG-DIG-NEXT-2-KNX.md](docs/ANLEITUNG-DIG-NEXT-2-KNX.md) |
 | ⚙️ **KNX-Usermod** | [usermods/KNX_IP](usermods/KNX_IP/readme.md) |
 
